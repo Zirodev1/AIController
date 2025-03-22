@@ -1,12 +1,13 @@
 """
-Speech engine for text-to-speech capabilities using ElevenLabs.
+Speech engine for text-to-speech capabilities using ElevenLabs with enhanced roleplay support.
 """
 import os
 import requests
 import pygame
 import tempfile
 import time
-from typing import Optional, Callable, Dict, Any
+import re
+from typing import Optional, List, Tuple, Dict, Any
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -41,15 +42,42 @@ class SpeechEngine:
         os.makedirs(self.audio_dir, exist_ok=True)
         os.makedirs(self.training_dir, exist_ok=True)
         
-        # Enhanced emotional voice settings
+        # Action patterns for roleplay
+        self.action_patterns = [
+            (r'\*(.*?)\*', 'action'),           # *action*
+            (r'\((.*?)\)', 'emotion'),          # (emotion)
+            (r'\[([^\]]*?)\]', 'description'),  # [description]
+        ]
+        
+        # Enhanced voice settings for different content types
         self.voice_settings = {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-            "style": 0.0,
-            "use_speaker_boost": True
+            'text': {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "style": 0.0,
+                "use_speaker_boost": True
+            },
+            'action': {
+                "stability": 0.7,
+                "similarity_boost": 0.8,
+                "style": 0.3,
+                "use_speaker_boost": True
+            },
+            'emotion': {
+                "stability": 0.4,
+                "similarity_boost": 0.9,
+                "style": 0.8,
+                "use_speaker_boost": True
+            },
+            'description': {
+                "stability": 0.6,
+                "similarity_boost": 0.7,
+                "style": 0.4,
+                "use_speaker_boost": True
+            }
         }
         
-        # Enhanced emotional speaking styles with more nuanced control
+        # Emotional speaking styles
         self.emotion_styles = {
             "happy": {
                 "style": 0.8,
@@ -69,64 +97,77 @@ class SpeechEngine:
                 "similarity_boost": 0.9,
                 "description": "Intense and forceful"
             },
-            "excited": {
-                "style": 0.9,
-                "stability": 0.5,
-                "similarity_boost": 0.8,
-                "description": "High energy and enthusiastic"
-            },
-            "calm": {
-                "style": 0.2,
+            "seductive": {
+                "style": 0.6,
                 "stability": 0.8,
+                "similarity_boost": 0.9,
+                "description": "Intimate and alluring"
+            },
+            "whisper": {
+                "style": 0.2,
+                "stability": 0.9,
                 "similarity_boost": 0.6,
-                "description": "Peaceful and soothing"
-            },
-            "neutral": {
-                "style": 0.5,
-                "stability": 0.5,
-                "similarity_boost": 0.7,
-                "description": "Balanced and natural"
-            },
-            "confident": {
-                "style": 0.7,
-                "stability": 0.6,
-                "similarity_boost": 0.8,
-                "description": "Strong and assured"
-            },
-            "gentle": {
-                "style": 0.3,
-                "stability": 0.7,
-                "similarity_boost": 0.6,
-                "description": "Soft and caring"
+                "description": "Soft and quiet"
             }
         }
         
         self.is_speaking = False
         self.current_temp_file = None
-        
-    def speak(self, text: str, emotion: Optional[str] = None, callback: Optional[Callable] = None, save_for_training: bool = True) -> str:
-        """
-        Speak the given text with emotional expression and optionally save for training.
-        
-        Args:
-            text: Text to speak
-            emotion: Emotional state to express (happy, sad, angry, etc.)
-            callback: Optional callback function to execute after speaking
-            save_for_training: Whether to save the audio file for training
+
+    def speak(self, text: str) -> None:
+        """Speak the given text with appropriate style changes for actions and emotions."""
+        if not text:
+            return
             
-        Returns:
-            str: Path to the saved audio file if save_for_training is True, else empty string
-        """
-        print(f"Speaking with emotion '{emotion or 'neutral'}': {text[:50]}...")
+        # Parse text into segments
+        segments = self._parse_text(text)
         
-        # Update voice settings based on emotion
-        if emotion and emotion in self.emotion_styles:
-            style_settings = self.emotion_styles[emotion]
-            self.voice_settings.update({
-                k: v for k, v in style_settings.items() 
-                if k in ["style", "stability", "similarity_boost"]
-            })
+        for segment_type, content in segments:
+            # Determine voice settings based on segment type
+            settings = self.voice_settings[segment_type if segment_type in self.voice_settings else 'text']
+            
+            # Adjust settings for emotional content
+            if segment_type == 'emotion':
+                emotion = content.lower()
+                for emotion_type, emotion_settings in self.emotion_styles.items():
+                    if emotion_type in emotion:
+                        settings.update(emotion_settings)
+                        break
+            
+            # Generate and play speech
+            self._generate_and_play_speech(content, settings)
+            
+            # Removed pause between segments
+
+    def _parse_text(self, text: str) -> List[Tuple[str, str]]:
+        """Parse text into segments of regular text and special content."""
+        segments = []
+        last_end = 0
         
+        # Sort all matches from all patterns
+        matches = []
+        for pattern, seg_type in self.action_patterns:
+            for match in re.finditer(pattern, text):
+                matches.append((match.start(), match.end(), match.group(1), seg_type))
+        matches.sort()
+        
+        # Process matches in order
+        for start, end, content, seg_type in matches:
+            # Add text before this match
+            if start > last_end:
+                segments.append(('text', text[last_end:start].strip()))
+            # Add the special content
+            segments.append((seg_type, content.strip()))
+            last_end = end
+        
+        # Add remaining text
+        if last_end < len(text):
+            segments.append(('text', text[last_end:].strip()))
+        
+        return [seg for seg in segments if seg[1]]
+
+    def _generate_and_play_speech(self, text: str, settings: Dict[str, Any]) -> None:
+        """Generate and play speech with given settings."""
         # Stop any current playback
         self.stop_speaking()
         
@@ -135,7 +176,7 @@ class SpeechEngine:
         payload = {
             "text": text,
             "model_id": self.model_id,
-            "voice_settings": self.voice_settings
+            "voice_settings": settings
         }
         
         try:
@@ -154,33 +195,7 @@ class SpeechEngine:
             with open(temp_path, "wb") as f:
                 f.write(response.content)
             
-            # Save a copy for training if requested
-            saved_path = ""
-            if save_for_training:
-                # Create a filename with timestamp and emotion
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                emotion_str = emotion if emotion else "neutral"
-                filename = f"{timestamp}_{emotion_str}.mp3"
-                
-                # Save in training directory
-                training_path = os.path.join(self.training_dir, filename)
-                with open(training_path, "wb") as f:
-                    f.write(response.content)
-                    
-                # Save metadata
-                metadata_path = os.path.join(self.training_dir, f"{timestamp}_{emotion_str}.txt")
-                with open(metadata_path, "w", encoding='utf-8') as f:
-                    f.write(f"Text: {text}\n")
-                    f.write(f"Emotion: {emotion_str}\n")
-                    f.write(f"Voice Settings: {self.voice_settings}\n")
-                    if emotion in self.emotion_styles:
-                        f.write(f"Style Description: {self.emotion_styles[emotion]['description']}\n")
-                
-                saved_path = training_path
-                print(f"Saved audio for training: {training_path}")
-            
             # Play the audio
-            print("Playing audio...")
             self.is_speaking = True
             pygame.mixer.music.load(temp_path)
             pygame.mixer.music.play()
@@ -198,41 +213,21 @@ class SpeechEngine:
                 except:
                     pass
                     
-            if callback:
-                callback()
-                
-            return saved_path
-                
         except Exception as e:
             print(f"Error generating/playing speech: {e}")
             self.is_speaking = False
-            return ""
-            
+
     def stop_speaking(self) -> None:
         """Stop the current speech."""
         if self.is_speaking:
-            print("Stopping speech...")
             pygame.mixer.music.stop()
             self.is_speaking = False
-        
-    def set_emotion(self, emotion: str) -> None:
-        """Set the emotional style for speech."""
-        if emotion in self.emotion_styles:
-            style_settings = self.emotion_styles[emotion]
-            self.voice_settings.update({
-                k: v for k, v in style_settings.items() 
-                if k in ["style", "stability", "similarity_boost"]
-            })
-            print(f"Emotional style set to: {emotion} ({style_settings['description']})")
-        else:
-            print(f"Unknown emotion: {emotion}")
-            print("Available emotions:", ", ".join(self.emotion_styles.keys()))
-            
+
     def set_voice(self, voice_id: str) -> None:
         """Set the voice to use."""
         self.voice_id = voice_id
         print(f"Voice set to: {voice_id}")
-        
+
     def list_voices(self) -> None:
         """List all available voices."""
         try:
@@ -248,18 +243,7 @@ class SpeechEngine:
                 
         except Exception as e:
             print(f"Error listing voices: {e}")
-            
-    def set_voice_settings(self, settings: Dict[str, float]) -> None:
-        """Set custom voice settings."""
-        self.voice_settings.update(settings)
-        print("Voice settings updated")
-        
-    def get_emotion_description(self, emotion: str) -> str:
-        """Get the description of an emotional style."""
-        if emotion in self.emotion_styles:
-            return self.emotion_styles[emotion]['description']
-        return "Unknown emotion"
-        
+
     def __del__(self):
         """Cleanup when the object is destroyed."""
         try:

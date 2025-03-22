@@ -111,7 +111,13 @@ def main():
     print("  personality <type> - Set personality type")
     print("  voices - List available voices")
     print("  voice <id> - Set voice by ID")
+    print("  mode <family|mature|adult> - Set content mode")
+    print("  relationship <friend|romantic|companion> - Set relationship type")
+    print("  verify <age> - Verify age for adult content")
     print("  quit - Exit the program")
+    
+    # Age verification status
+    age_verified = False
     
     while True:
         try:
@@ -127,7 +133,38 @@ def main():
             arg = parts[1] if len(parts) > 1 else None
             
             # Process command
-            if cmd == 'test':
+            if cmd == 'mode' and arg:
+                # Set content mode
+                success = llm_interface.set_content_mode(arg, age_verified)
+                if success:
+                    print(f"Content mode set to: {arg}")
+                else:
+                    print("Failed to set content mode. Check requirements.")
+                    
+            elif cmd == 'relationship' and arg:
+                # Set relationship type
+                success = llm_interface.set_relationship_type(arg)
+                if success:
+                    print(f"Relationship type set to: {arg}")
+                else:
+                    print("Failed to set relationship type.")
+                    
+            elif cmd == 'verify' and arg:
+                try:
+                    age = int(arg)
+                    if age >= 18:
+                        age_verified = True
+                        print("Age verification successful.")
+                        # Update content mode if it was previously set to adult
+                        if llm_interface.content_level == 'adult':
+                            llm_interface.set_content_mode('adult', True)
+                    else:
+                        age_verified = False
+                        print("Must be 18 or older for adult content.")
+                except ValueError:
+                    print("Please enter a valid age number.")
+                    
+            elif cmd == 'test':
                 test_emotional_scenarios(emotion_engine, llm_interface, speech_engine)
                 
             elif cmd == 'text' and arg:
