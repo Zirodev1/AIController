@@ -1,145 +1,154 @@
 """
-Emotion Engine for processing and managing emotional states.
+Core emotion processing engine.
 """
-import numpy as np
-from typing import Dict, Any, List, Optional, Tuple
-from .emotional_states import EmotionalState, ComplexEmotionalSystem
+from typing import Dict, Any, List, Optional
+import json
+import random
 
 class EmotionEngine:
     def __init__(self):
-        """Initialize the emotion engine with default emotional state."""
-        self.emotional_system = ComplexEmotionalSystem()
-        self.current_state = EmotionalState()
-        self.emotion_history: List[Dict[str, Any]] = []
-        self.context_history: List[Dict[str, Any]] = []
-        self.last_update_time = 0
-        self.emotional_decay_rate = 0.1  # Rate at which emotions decay over time
+        """Initialize the emotion engine with default states."""
+        self.emotions = {
+            'happy': 0.0,
+            'sad': 0.0,
+            'angry': 0.0,
+            'excited': 0.0,
+            'calm': 0.5,  # Default state is calm
+            'neutral': 0.5
+        }
         
-    def process_text(self, text: str) -> None:
-        """Process text input and update emotional state."""
-        # Update state with text input
-        self.update_state({
-            'text': {'text': text},
-            'context': {'context_type': 'text_input'}
+        self.personality = 'balanced'
+        self.history = []
+        
+    def process_text(self, text: str) -> Optional[str]:
+        """
+        Process input text and update emotional state.
+        Returns a response if appropriate, None otherwise.
+        """
+        # Update emotions based on text content
+        text_lower = text.lower()
+        
+        # Simple keyword-based emotion detection
+        if any(word in text_lower for word in ['happy', 'joy', 'great', 'wonderful', 'excited']):
+            self.emotions['happy'] += 0.3
+            self.emotions['excited'] += 0.2
+        elif any(word in text_lower for word in ['sad', 'unhappy', 'sorry', 'unfortunate']):
+            self.emotions['sad'] += 0.3
+            self.emotions['calm'] -= 0.1
+        elif any(word in text_lower for word in ['angry', 'mad', 'frustrated']):
+            self.emotions['angry'] += 0.3
+            self.emotions['calm'] -= 0.2
+            
+        # Normalize emotions
+        self._normalize_emotions()
+        
+        # Add to history
+        self.history.append({
+            'input': text,
+            'emotions': self.emotions.copy()
         })
+        
+        return None  # Let the LLM generate the actual response
         
     def simulate_user_emotion(self, emotion: str) -> None:
-        """Simulate user emotion and update emotional state."""
-        # Update state with user emotion
-        self.update_state({
-            'user_emotion': {emotion: 0.8},
-            'context': {'context_type': 'user_emotion'}
-        })
-        
-    def update_environment(self, env_data: Dict[str, float]) -> None:
-        """Update environmental factors and adjust emotional state."""
-        # Process environmental factors with more nuanced emotional reactions
-        emotional_impacts = {}
-        
-        # Brightness affects joy and energy levels
+        """Simulate receiving an emotion from the user."""
+        emotion = emotion.lower()
+        if emotion in self.emotions:
+            # Increase the specified emotion
+            self.emotions[emotion] += 0.4
+            
+            # Adjust related emotions
+            if emotion == 'happy':
+                self.emotions['sad'] -= 0.2
+                self.emotions['excited'] += 0.2
+            elif emotion == 'sad':
+                self.emotions['happy'] -= 0.2
+                self.emotions['calm'] += 0.1
+            elif emotion == 'angry':
+                self.emotions['calm'] -= 0.3
+                self.emotions['happy'] -= 0.2
+                
+            # Normalize emotions
+            self._normalize_emotions()
+            
+    def update_environment(self, env_data: Dict[str, Any]) -> None:
+        """Update emotional state based on environmental factors."""
+        # Process environmental factors
         if 'brightness' in env_data:
-            brightness = env_data['brightness']
-            emotional_impacts['joy'] = brightness * 0.3
-            emotional_impacts['energy'] = brightness * 0.2
-            if brightness < 0.3:
-                emotional_impacts['sadness'] = 0.2
-                emotional_impacts['fear'] = 0.1
+            if env_data['brightness'] > 0.7:
+                self.emotions['happy'] += 0.1
+                self.emotions['excited'] += 0.1
+            elif env_data['brightness'] < 0.3:
+                self.emotions['calm'] += 0.1
                 
-        # Noise level affects stress and focus
         if 'noise_level' in env_data:
-            noise = env_data['noise_level']
-            emotional_impacts['stress'] = noise * 0.4
-            emotional_impacts['focus'] = (1 - noise) * 0.3
-            if noise > 0.7:
-                emotional_impacts['fear'] = 0.2
-                emotional_impacts['anger'] = 0.1
+            if env_data['noise_level'] > 0.7:
+                self.emotions['excited'] += 0.2
+                self.emotions['calm'] -= 0.2
+            elif env_data['noise_level'] < 0.3:
+                self.emotions['calm'] += 0.2
                 
-        # Temperature affects comfort and energy
         if 'temperature' in env_data:
-            temp = env_data['temperature']
-            if temp > 0.8:
-                emotional_impacts['stress'] = 0.2
-                emotional_impacts['energy'] = -0.1
-            elif temp < 0.2:
-                emotional_impacts['sadness'] = 0.1
-                emotional_impacts['energy'] = -0.1
+            if env_data['temperature'] > 28:  # Too hot
+                self.emotions['angry'] += 0.1
+                self.emotions['calm'] -= 0.1
+            elif env_data['temperature'] < 18:  # Too cold
+                self.emotions['sad'] += 0.1
                 
-        # Crowding affects stress and social comfort
-        if 'crowding' in env_data:
-            crowding = env_data['crowding']
-            emotional_impacts['stress'] = crowding * 0.3
-            emotional_impacts['social_comfort'] = (1 - crowding) * 0.2
-            if crowding > 0.8:
-                emotional_impacts['fear'] = 0.1
-                emotional_impacts['anger'] = 0.1
-                
-        # Update state with environmental impacts
-        self.update_state({
-            'environment': env_data,
-            'emotional_impacts': emotional_impacts,
-            'context': {'context_type': 'environment'}
-        })
+        # Normalize emotions
+        self._normalize_emotions()
         
     def get_current_state(self) -> Dict[str, Any]:
-        """Get the current emotional state in a format suitable for the LLM."""
-        complex_state, confidence = self.emotional_system.get_complex_state(self.current_state)
+        """Get the current emotional state."""
+        # Find the primary emotion (highest value)
+        primary_emotion = max(self.emotions.items(), key=lambda x: x[1])[0]
+        
         return {
-            'complex_state': {
-                'state': complex_state,
-                'intensity': self.current_state.intensity
-            },
-            'basic_emotions': self.current_state.get_vector()
+            'emotions': self.emotions,
+            'primary_emotion': primary_emotion,
+            'personality': self.personality
         }
         
     def reset_emotions(self) -> None:
-        """Reset the emotional state to neutral."""
-        self.current_state = EmotionalState()
-        self.emotion_history = []
-        self.context_history = []
+        """Reset emotions to default state."""
+        self.emotions = {
+            'happy': 0.0,
+            'sad': 0.0,
+            'angry': 0.0,
+            'excited': 0.0,
+            'calm': 0.5,
+            'neutral': 0.5
+        }
         
-    def update_state(self, data: Dict[str, Any]) -> None:
-        """Update the emotional state based on new data."""
-        # Apply emotional decay
-        self.apply_emotional_decay()
-        
-        # Store current state in history
-        self.emotion_history.append(self.current_state.get_vector())
-        self.context_history.append(data.get('context', {}))
-        
-        # Update basic emotions based on input
-        if 'text' in data:
-            # Process text emotions (simplified for now)
-            text = data['text']['text'].lower()
-            if any(word in text for word in ['happy', 'excited', 'great', 'amazing']):
-                self.current_state.adjust_emotion('joy', 0.3)
-            elif any(word in text for word in ['sad', 'unhappy', 'terrible', 'bad']):
-                self.current_state.adjust_emotion('sadness', 0.3)
-                
-        elif 'user_emotion' in data:
-            # Empathize with user emotion
-            for emotion, intensity in data['user_emotion'].items():
-                self.current_state.adjust_emotion(emotion, intensity * 0.5)
-                
-        elif 'environment' in data:
-            # Apply environmental emotional impacts
-            if 'emotional_impacts' in data:
-                for emotion, impact in data['emotional_impacts'].items():
-                    self.current_state.adjust_emotion(emotion, impact)
-                    
-        # Normalize emotional intensities
-        self.current_state.normalize()
-        
-    def apply_emotional_decay(self) -> None:
-        """Apply emotional decay to all emotions."""
-        for emotion in self.current_state.emotions:
-            current_value = self.current_state.emotions[emotion]
-            decay = current_value * self.emotional_decay_rate
-            self.current_state.emotions[emotion] = max(0.0, current_value - decay)
+    def set_personality(self, personality_type: str) -> None:
+        """Set the personality type."""
+        valid_types = ['empathetic', 'analytical', 'creative', 'balanced']
+        if personality_type.lower() in valid_types:
+            self.personality = personality_type.lower()
             
+            # Adjust emotional baseline based on personality
+            if personality_type == 'empathetic':
+                self.emotions['calm'] += 0.2
+            elif personality_type == 'analytical':
+                self.emotions['neutral'] += 0.3
+            elif personality_type == 'creative':
+                self.emotions['excited'] += 0.2
+                
+            self._normalize_emotions()
+        else:
+            raise ValueError(f"Invalid personality type. Must be one of: {', '.join(valid_types)}")
+            
+    def _normalize_emotions(self) -> None:
+        """Normalize emotion values to be between 0 and 1."""
+        # Ensure all emotions are between 0 and 1
+        for emotion in self.emotions:
+            self.emotions[emotion] = max(0.0, min(1.0, self.emotions[emotion]))
+            
+        # Decay emotions slightly towards neutral
+        for emotion in self.emotions:
+            if emotion not in ['calm', 'neutral']:
+                self.emotions[emotion] *= 0.95  # Slight decay
+                
     def get_emotional_history(self) -> List[Dict[str, Any]]:
         """Get the history of emotional states."""
-        return self.emotion_history
-        
-    def get_context_history(self) -> List[Dict[str, Any]]:
-        """Get the history of contexts."""
-        return self.context_history 
+        return self.history 
