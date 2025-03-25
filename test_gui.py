@@ -341,9 +341,10 @@ class AIGUI:
         resolution_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=2)
         
         ttk.Label(resolution_frame, text="Resolution:").grid(row=0, column=0, padx=5)
+        # Use 480p as default for better performance
         self.resolution_var = tk.StringVar(value="640x480")
         resolution_combo = ttk.Combobox(resolution_frame, textvariable=self.resolution_var,
-                                      values=["640x480", "1280x720", "1920x1080"])
+                                      values=["320x240", "640x480", "800x600", "1280x720", "1920x1080"])
         resolution_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
         
         # Vision features
@@ -364,6 +365,12 @@ class AIGUI:
         ttk.Checkbutton(features_frame, text="Gesture Detection",
                        variable=self.gesture_detect_var,
                        command=self._update_vision_features).grid(row=2, column=0, sticky=tk.W)
+        
+        # Debug mode
+        self.debug_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(features_frame, text="Debug Mode",
+                       variable=self.debug_var,
+                       command=self._toggle_debug).grid(row=3, column=0, sticky=tk.W)
         
         # Vision controls
         control_frame = ttk.LabelFrame(parent, text="Vision Controls", padding="5")
@@ -446,7 +453,7 @@ class AIGUI:
             self._update_vision_canvas(self.current_frame)
 
     def _update_vision_canvas(self, frame):
-        """Update the vision canvas with a new frame using a simplified approach."""
+        """Update the vision canvas with a new frame using direct face detection."""
         if frame is None or not self.use_vision:
             return
             
@@ -457,15 +464,83 @@ class AIGUI:
             
             if canvas_width <= 1 or canvas_height <= 1:
                 return  # Canvas not properly initialized yet
+                
+            # Create a copy of the frame for processing
+            display_frame = frame.copy()
+            
+            # Direct face detection in the GUI if enabled
+            if self.face_detect_var.get():
+                # Ensure face cascade is loaded
+                if not hasattr(self, 'face_cascade') or self.face_cascade is None:
+                    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                    self.logger.info(f"Loading cascade classifier directly in GUI from: {cascade_path}")
+                    self.face_cascade = cv2.CascadeClassifier(cascade_path)
+                    if self.face_cascade.empty():
+                        self.logger.error("Failed to load face cascade in GUI")
+                    else:
+                        self.logger.info("Successfully loaded face cascade in GUI")
+                
+                # Detect faces directly in the GUI
+                if hasattr(self, 'face_cascade') and self.face_cascade is not None:
+                    # Convert to grayscale for face detection
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    
+                    # Detect faces with relaxed parameters for better detection 
+                    faces = self.face_cascade.detectMultiScale(
+                        gray,
+                        scaleFactor=1.2,
+                        minNeighbors=4,
+                        minSize=(30, 30),
+                        flags=cv2.CASCADE_SCALE_IMAGE
+                    )
+                    
+                    # Draw face rectangles
+                    if len(faces) > 0:
+                        for (x, y, w, h) in faces:
+                            # Draw rectangle on the display frame
+                            cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 3)
+                            
+                            # Add label above the rectangle
+                            cv2.putText(display_frame, "Face", (x, y-10),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                            
+                        # Update the vision info panel
+                        face_info = f"Found {len(faces)} face{'s' if len(faces) > 1 else ''} directly in GUI"
+                        self.vision_info.insert(tk.END, f"{face_info}\n")
             
             # Calculate scaling to fit frame in canvas while maintaining aspect ratio
-            frame_height, frame_width = frame.shape[:2]
+            frame_height, frame_width = display_frame.shape[:2]
             scale = min(canvas_width/frame_width, canvas_height/frame_height)
             new_width = int(frame_width * scale)
             new_height = int(frame_height * scale)
             
             # Resize frame
-            resized = cv2.resize(frame, (new_width, new_height))
+            resized = cv2.resize(display_frame, (new_width, new_height))
+            
+            # Try using VisionSystem's face detection info (as a fallback)
+            if hasattr(self, 'vision_system') and self.vision_system:
+                info = self.vision_system.get_info()
+                if info.face_detected and info.face_location is not None:
+                    x, y, w, h = info.face_location
+                    # Scale face location to match resized frame
+                    scale_x = new_width / frame_width
+                    scale_y = new_height / frame_height
+                    
+                    x_scaled = int(x * scale_x)
+                    y_scaled = int(y * scale_y)
+                    w_scaled = int(w * scale_x)
+                    h_scaled = int(h * scale_y)
+                    
+                    # Draw a thicker rectangle for visibility with a different color
+                    cv2.rectangle(resized, (x_scaled, y_scaled), 
+                                 (x_scaled+w_scaled, y_scaled+h_scaled), 
+                                 (255, 0, 0), 3)  # Blue for VisionSystem detection
+                    
+                    # Add text to show VisionSystem detected a face
+                    cv2.putText(resized, "VisionSystem Face", 
+                               (x_scaled, y_scaled-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, 
+                               (255, 0, 0), 2)
             
             # Convert to PhotoImage
             image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -482,6 +557,8 @@ class AIGUI:
             
         except Exception as e:
             self.logger.error(f"Error updating vision canvas: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
 
     def _update_vision_info(self, info=None):
         """Update the vision information display."""
@@ -1416,7 +1493,7 @@ class AIGUI:
         ttk.Label(resolution_frame, text="Resolution:").pack(side=tk.LEFT)
         resolution_var = tk.StringVar(value=self.resolution_var.get())
         resolution_combo = ttk.Combobox(resolution_frame, textvariable=resolution_var,
-                                      values=["640x480", "1280x720", "1920x1080"])
+                                      values=["320x240", "640x480", "800x600", "1280x720", "1920x1080"])
         resolution_combo.pack(side=tk.LEFT, padx=5)
         
         # Buttons
@@ -1598,6 +1675,108 @@ class AIGUI:
             self.logger.error(f"Error initializing vision system: {e}")
             self.vision_status_var.set(f"Error: {str(e)}")
             return False
+
+    def _toggle_debug(self):
+        """Toggle debug mode for vision system."""
+        debug_enabled = self.debug_var.get()
+        if self.vision_system:
+            self.vision_system.enable_debug(debug_enabled)
+            self.vision_info.insert(tk.END, f"\nDebug mode {'enabled' if debug_enabled else 'disabled'}\n")
+            
+            # In debug mode, test face detection with a direct test
+            if debug_enabled:
+                self._test_face_detection()
+    
+    def _test_face_detection(self):
+        """Test face detection directly to ensure it's working."""
+        self.vision_info.insert(tk.END, "\nTesting face detection directly...\n")
+        
+        try:
+            # Ensure face cascade is loaded
+            if not hasattr(self, 'face_cascade') or self.face_cascade is None:
+                cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                self.logger.info(f"Loading cascade classifier for test from: {cascade_path}")
+                self.face_cascade = cv2.CascadeClassifier(cascade_path)
+                if self.face_cascade.empty():
+                    self.vision_info.insert(tk.END, "Error: Failed to load face cascade\n")
+                    return
+                else:
+                    self.vision_info.insert(tk.END, "Successfully loaded face cascade\n")
+            
+            # Create a test frame if we don't have a current frame
+            if not hasattr(self, 'current_frame') or self.current_frame is None:
+                self.vision_info.insert(tk.END, "No current frame, using test pattern\n")
+                test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.rectangle(test_frame, (200, 150), (400, 350), (255, 255, 255), -1)  # Draw a white rectangle
+                cv2.circle(test_frame, (250, 200), 30, (0, 0, 0), -1)  # Left eye
+                cv2.circle(test_frame, (350, 200), 30, (0, 0, 0), -1)  # Right eye
+                cv2.rectangle(test_frame, (280, 300), (320, 320), (0, 0, 0), -1)  # Mouth
+                
+                # Display test pattern for debugging
+                debug_canvas = self.vision_canvas.winfo_width(), self.vision_canvas.winfo_height() 
+                if debug_canvas[0] > 1 and debug_canvas[1] > 1:
+                    self._update_vision_canvas(test_frame)
+                    self.vision_info.insert(tk.END, "Displayed test pattern\n")
+                
+                # Try face detection on our test pattern (it's crude but should trigger detection)
+                gray = cv2.cvtColor(test_frame, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=2, minSize=(10, 10),
+                    flags=cv2.CASCADE_SCALE_IMAGE
+                )
+                
+                self.vision_info.insert(tk.END, f"Test pattern face detection result: {len(faces)} faces found\n")
+                
+            # If we have a current frame, test on that
+            elif self.current_frame is not None:
+                self.vision_info.insert(tk.END, "Testing face detection on current frame\n")
+                
+                # Try face detection
+                gray = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2GRAY)
+                faces = self.face_cascade.detectMultiScale(
+                    gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30),
+                    flags=cv2.CASCADE_SCALE_IMAGE
+                )
+                
+                self.vision_info.insert(tk.END, f"Current frame face detection result: {len(faces)} faces found\n")
+                
+                # Make a debug frame with face rectangles
+                if len(faces) > 0:
+                    debug_frame = self.current_frame.copy()
+                    for (x, y, w, h) in faces:
+                        cv2.rectangle(debug_frame, (x, y), (x+w, y+h), (0, 255, 0), 3)
+                        cv2.putText(debug_frame, "Face", (x, y-10), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Show the debug frame
+                    self._update_vision_canvas(debug_frame)
+                    self.vision_info.insert(tk.END, "Displayed frame with face detection\n")
+                else:
+                    self.vision_info.insert(tk.END, "No faces found in current frame\n")
+            
+            # Show OpenCV version for debugging
+            self.vision_info.insert(tk.END, f"OpenCV version: {cv2.__version__}\n")
+            
+            # Get Haar cascade files
+            haar_dir = cv2.data.haarcascades
+            self.vision_info.insert(tk.END, f"Haar cascades directory: {haar_dir}\n")
+            
+            # Try to list Haar cascade files
+            try:
+                import os
+                haar_files = os.listdir(haar_dir)
+                self.vision_info.insert(tk.END, f"Found {len(haar_files)} Haar cascade files\n")
+                for file in haar_files[:3]:  # List first 3 only to avoid too much output
+                    self.vision_info.insert(tk.END, f"  - {file}\n")
+                if len(haar_files) > 3:
+                    self.vision_info.insert(tk.END, f"  - ...and {len(haar_files)-3} more\n")
+            except Exception as e:
+                self.vision_info.insert(tk.END, f"Error listing Haar files: {e}\n")
+            
+        except Exception as e:
+            self.vision_info.insert(tk.END, f"Error in face detection test: {e}\n")
+            import traceback
+            self.vision_info.insert(tk.END, traceback.format_exc() + "\n")
 
 def main():
     """Main function to run the GUI."""
