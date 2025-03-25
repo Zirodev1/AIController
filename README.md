@@ -40,6 +40,24 @@ A sophisticated AI system designed to control and animate 3D avatars with realis
 - Object recognition
 - Emotion detection
 
+### Social Media Integration
+- Natural posting based on emotional state and experiences
+- Scheduled content updates and announcements
+- Command-based posting system
+- Multi-platform support (Twitter, OnlyFans, etc.)
+- Platform-specific content validation
+- Automated engagement and responses
+- Content scheduling and management
+
+### Image Generation System
+- Selfie generation in different poses and expressions
+- Environment-aware image capture
+- Style variations and filters
+- Mood-based image effects
+- Custom pose generation
+- Background scene creation
+- Real-time image processing
+
 ## Project Structure
 
 ```
@@ -48,7 +66,8 @@ AIController/
 │   ├── personality/  # Personality system
 │   ├── emotions/     # Emotional processing
 │   ├── memory/       # Memory system
-│   └── behavior/     # Behavior control
+│   ├── behavior/     # Behavior control
+│   └── social/       # Social media integration
 ├── vision/           # Computer vision
 │   ├── face/        # Facial recognition
 │   ├── gesture/     # Gesture recognition
@@ -60,6 +79,14 @@ AIController/
 ├── api/              # Engine integration API
 │   ├── bindings/    # Language bindings
 │   └── protocols/   # Communication protocols
+├── social/           # Social media features
+│   ├── platforms/   # Platform integrations
+│   ├── scheduler/   # Content scheduling
+│   └── validator/   # Content validation
+├── image/            # Image generation
+│   ├── generator/   # Image generation
+│   ├── effects/     # Image effects
+│   └── poses/       # Pose management
 └── utils/           # Shared utilities
 ```
 
@@ -70,6 +97,7 @@ AIController/
 - PyTorch for deep learning
 - Transformers for NLP
 - OpenCV for computer vision
+- Stable Diffusion for image generation
 - Additional dependencies in requirements.txt
 
 ### API Requirements
@@ -77,6 +105,7 @@ AIController/
 - WebSocket for real-time communication
 - Protocol Buffers for data serialization
 - ZeroMQ for high-performance messaging
+- Social media platform APIs (Twitter, OnlyFans)
 
 ## Development Status
 
@@ -86,6 +115,8 @@ Current focus:
 - Initial memory system
 - Basic behavior control
 - Engine integration API
+- Social media integration
+- Image generation system
 
 ## Installation
 
@@ -119,6 +150,17 @@ companion.process_input("Hello!")
 
 # Get AI response
 response = companion.get_response()
+
+# Social media commands
+companion.process_command("Take a selfie in your garden!")
+companion.process_command("Share your current mood with your followers!")
+
+# Schedule a post
+companion.social_media.schedule_post(
+    "Good morning everyone! *stretches*",
+    time="09:00",
+    frequency="daily"
+)
 ```
 
 ## License
