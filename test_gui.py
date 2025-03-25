@@ -29,16 +29,21 @@ class ModernTheme:
     """Modern color scheme and styling."""
     # Colors
     PRIMARY = "#2196F3"  # Blue
+    PRIMARY_DARK = "#1976D2"  # Darker blue for pressed state
+    PRIMARY_LIGHT = "#64B5F6"  # Lighter blue for hover
     SECONDARY = "#FF4081"  # Pink
     BACKGROUND = "#FFFFFF"  # White
     SURFACE = "#F5F5F5"  # Light Gray
     TEXT = "#212121"  # Dark Gray
     TEXT_SECONDARY = "#757575"  # Medium Gray
+    TEXT_ON_PRIMARY = "#000000"  # Black text on primary color
+    ERROR = "#F44336"  # Red for errors
+    SUCCESS = "#4CAF50"  # Green for success
     
     # Styles
     BUTTON_STYLE = {
         'background': PRIMARY,
-        'foreground': 'white',
+        'foreground': TEXT_ON_PRIMARY,
         'padding': (10, 5)
     }
     
@@ -61,15 +66,15 @@ class AIGUI:
         self.root.title("AI Companion")
         self.root.geometry("1200x800")
         
-        # Initialize AI components
+        # Initialize basic components only
         self.voice_input = None
         self.speech_engine = SpeechEngine()
         self.emotion_engine = EmotionEngine()
         self.llm = LLMInterface()
         self.text_processor = TextProcessor()
-        self.vision_system = VisionSystem()
-        # TODO: Re-enable social media integration once the API key issue is resolved
-        # self.social_ai = SocialAI(api_key="your-api-key")  # Replace with actual API key
+        
+        # Defer vision system initialization
+        self.vision_system = None
         
         # GUI state variables
         self.is_listening = False
@@ -82,7 +87,7 @@ class AIGUI:
         # Interaction mode flags
         self.use_voice_input = True
         self.use_voice_output = True
-        self.use_vision = True
+        self.use_vision = False  # Start with vision disabled
         
         # Create main menu
         self._create_menu()
@@ -98,6 +103,9 @@ class AIGUI:
         
         # Apply modern theme
         self._apply_theme()
+
+        # Log successful initialization
+        self.logger.info("GUI initialized successfully")
 
     def _create_menu(self):
         """Create the main menu bar."""
@@ -201,7 +209,7 @@ class AIGUI:
         # Create custom button style with black text
         style.configure("Custom.TButton",
                        background=ModernTheme.PRIMARY,
-                       foreground='black',
+                       foreground=ModernTheme.TEXT_ON_PRIMARY,
                        padding=(10, 5))
         style.map("Custom.TButton",
                  foreground=[('pressed', 'black'), ('active', 'black')],
@@ -438,14 +446,11 @@ class AIGUI:
             self._update_vision_canvas(self.current_frame)
 
     def _update_vision_canvas(self, frame):
-        """Update the vision canvas with a new frame."""
+        """Update the vision canvas with a new frame using a simplified approach."""
         if frame is None or not self.use_vision:
             return
             
         try:
-            # Store the current frame
-            self.current_frame = frame
-            
             # Get canvas dimensions
             canvas_width = self.vision_canvas.winfo_width()
             canvas_height = self.vision_canvas.winfo_height()
@@ -474,38 +479,61 @@ class AIGUI:
                 image=self.current_photo,
                 anchor=tk.CENTER
             )
+            
         except Exception as e:
             self.logger.error(f"Error updating vision canvas: {e}")
 
-    def _update_vision_info(self):
+    def _update_vision_info(self, info=None):
         """Update the vision information display."""
-        if self.use_vision:
-            info = self.vision_system.get_info()
-            self.vision_info.delete(1.0, tk.END)
-            self.vision_info.insert(tk.END, f"Camera Status: {info.camera_status}\n")
-            self.vision_info.insert(tk.END, f"FPS: {info.fps:.1f}\n")
-            self.vision_info.insert(tk.END, f"Face Detected: {info.face_detected}\n")
-            if info.face_detected:
-                self.vision_info.insert(tk.END, f"Face Location: {info.face_location}\n")
-            
-            # Update status bar
-            self.vision_status_var.set(f"Status: {info.camera_status}")
-            self.fps_var.set(f"FPS: {info.fps:.1f}")
+        if self.use_vision and self.vision_system:
+            try:
+                # Get info from the vision system if not provided
+                if info is None:
+                    info = self.vision_system.get_info()
+                
+                # Clear the info display
+                self.vision_info.delete(1.0, tk.END)
+                
+                # Add basic camera info
+                self.vision_info.insert(tk.END, f"Camera Status: {info.camera_status}\n")
+                self.vision_info.insert(tk.END, f"FPS: {info.fps:.1f}\n")
+                
+                # Add face detection info directly from VisionSystem
+                self.vision_info.insert(tk.END, f"Face Detected: {info.face_detected}\n")
+                if info.face_detected and info.face_location is not None:
+                    x, y, w, h = info.face_location
+                    self.vision_info.insert(tk.END, f"Face Location: ({x}, {y}, {w}, {h})\n")
+                
+                # Update status bar with current status
+                self.vision_status_var.set(f"Status: {info.camera_status}")
+                self.fps_var.set(f"FPS: {info.fps:.1f}")
+                
+            except Exception as e:
+                self.logger.error(f"Error updating vision info: {e}")
+                self.vision_info.insert(tk.END, f"Error getting vision info: {str(e)}\n")
 
     def _toggle_vision(self):
-        """Toggle the vision system."""
+        """Toggle the vision system with improved error handling."""
         if self.use_vision:
-            self.vision_system.stop()
+            # Stopping the vision system
+            if self.vision_system:
+                self.vision_system.stop()
             self.vision_button.configure(text="Start Vision")
             self.vision_status_var.set("Stopped")
             self.use_vision = False
         else:
+            # First ensure vision system is initialized
+            if not self._initialize_vision_system():
+                tk.messagebox.showerror("Vision System Error", 
+                                      "Failed to initialize vision system")
+                return
+                
             try:
                 # Update status to show initialization
                 self.vision_status_var.set("Initializing camera...")
                 self.root.update()  # Force GUI update
                 
-                # Get camera settings
+                # Get camera settings - we'll apply these directly to the vision system
                 width, height = map(int, self.resolution_var.get().split('x'))
                 camera_index = 0  # Default to first camera
                 if self.camera_var.get() != "Default":
@@ -514,36 +542,63 @@ class AIGUI:
                     except ValueError:
                         self.logger.warning("Invalid camera selection, using default")
                 
+                # Set vision system properties before starting
+                if hasattr(self.vision_system, "set_camera_index"):
+                    self.vision_system.set_camera_index(camera_index)
+                    
+                if hasattr(self.vision_system, "set_resolution"):
+                    self.vision_system.set_resolution(width, height)
+                
                 # Initialize camera in a separate thread
                 def init_camera():
                     try:
-                        # Start vision system with settings
-                        success = self.vision_system.start(
-                            camera_index=camera_index,
-                            width=width,
-                            height=height
-                        )
+                        # Start vision system without arguments
+                        success = self.vision_system.start()
                         
                         if success:
-                            self.root.after(0, lambda: self._on_camera_ready())
+                            self.root.after(0, self._on_camera_ready)
                         else:
-                            self.root.after(0, lambda: self._on_camera_error("Failed to initialize camera"))
+                            error_msg = "Failed to initialize camera"
+                            self.root.after(0, lambda: self._on_camera_error(error_msg))
                             
-                    except Exception as e:
-                        self.root.after(0, lambda: self._on_camera_error(str(e)))
+                    except Exception as exc:
+                        error_msg = str(exc)
+                        self.root.after(0, lambda: self._on_camera_error(error_msg))
                 
                 # Start initialization thread
                 threading.Thread(target=init_camera, daemon=True).start()
                 
             except Exception as e:
                 self._on_camera_error(str(e))
-
+                
     def _on_camera_ready(self):
         """Called when camera is successfully initialized."""
         self.vision_button.configure(text="Stop Vision")
         self.vision_status_var.set("Running")
+        # Add a visual indicator of success
+        self.status_var.set("Camera initialized successfully")
         self.use_vision = True
+        
+        # Switch to Vision tab in the output notebook to show camera feed
+        for notebook in self.root.winfo_children():
+            if isinstance(notebook, ttk.Notebook):
+                for idx, tab_id in enumerate(notebook.tabs()):
+                    tab_name = notebook.tab(tab_id, "text")
+                    if tab_name == "Vision":
+                        notebook.select(idx)
+                        break
+        
+        # Start the vision update thread
         self._start_vision_update()
+        
+        # Display a message in the vision info panel
+        self.vision_info.delete(1.0, tk.END)
+        self.vision_info.insert(tk.END, "Camera is now active!\n")
+        self.vision_info.insert(tk.END, "If you don't see an image, try the following:\n")
+        self.vision_info.insert(tk.END, "1. Wait a moment for the camera to stabilize\n")
+        self.vision_info.insert(tk.END, "2. Make sure your camera is properly connected\n")
+        self.vision_info.insert(tk.END, "3. Try selecting a different camera from the dropdown\n")
+        self.vision_info.insert(tk.END, "4. Try a different resolution\n")
 
     def _on_camera_error(self, error_msg):
         """Called when camera initialization fails."""
@@ -551,31 +606,239 @@ class AIGUI:
         self.logger.error(f"Error starting vision system: {error_msg}")
         self.use_vision = False
         self.vision_button.configure(text="Start Vision")
+        # Show error in status bar
+        self.status_var.set(f"Camera error: {error_msg}")
 
     def _start_vision_update(self):
-        """Start the vision update thread."""
+        """Start the vision update thread with enhanced error recovery."""
         def update_vision():
+            failure_count = 0
+            max_failures = 15  # Allow more failures before giving up
+            recovery_attempts = 0
+            max_recovery_attempts = 3
+            
+            # Set initial times
+            last_frame_time = 0
+            last_info_update_time = 0
+            last_recovery_time = 0
+            
+            # Timing controls
+            min_frame_interval = 0.033  # About 30fps max for frame capture
+            info_update_interval = 0.2  # Update info display every 0.2 seconds
+            
+            # Initial dummy frame for displaying error messages
+            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(error_frame, "Waiting for camera...", (100, 240),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # First show waiting message
+            self.root.after(0, lambda f=error_frame: self._update_vision_canvas(f))
+            
             while self.use_vision:
                 try:
+                    # Make sure the vision system is still running
+                    if not hasattr(self.vision_system, 'is_running') or not self.vision_system.is_running:
+                        self.logger.warning("Vision system not running. Stopping update thread.")
+                        break
+                    
+                    # Control capture timing
+                    current_time = time.time()
+                    if current_time - last_frame_time < min_frame_interval:
+                        time.sleep(0.001)  # Small sleep to avoid CPU spinning
+                        continue
+                        
+                    # Update frame time
+                    last_frame_time = current_time
+                    
+                    # Get frame from vision system (it will handle face detection internally)
                     frame = self.vision_system.capture_image()
-                    if frame is not None and frame.size > 0:  # Check if frame is valid
-                        self._update_vision_canvas(frame)
-                        self._update_vision_info()
+                    
+                    # If we got a valid frame
+                    if frame is not None and frame.size > 0:
+                        # Check if this is a black/empty frame (sometimes returned as fallback)
+                        # Sum up pixel values - if very low, likely a black/dummy frame
+                        frame_brightness = np.sum(frame)
+                        if frame_brightness < 1000:  # Very dark frame threshold
+                            # This is likely a dummy/error frame
+                            failure_count += 1
+                            self.logger.warning(f"Received likely dummy frame ({failure_count}/{max_failures})")
+                            
+                            # Create a message frame
+                            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(error_frame, f"Camera recovering... ({failure_count}/{max_failures})", 
+                                      (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                            
+                            # Update display with error message
+                            self.root.after(0, lambda f=error_frame: self._update_vision_canvas(f))
+                            
+                            # Try to recover if needed
+                            if failure_count % 5 == 0 and recovery_attempts < max_recovery_attempts:
+                                self._attempt_camera_recovery()
+                                recovery_attempts += 1
+                                last_recovery_time = current_time
+                            
+                            # Check if we've had too many failures
+                            if failure_count >= max_failures:
+                                raise Exception("Too many consecutive frame capture failures")
+                            
+                            # Add delay between attempts
+                            time.sleep(0.5)
+                            continue
+                        
+                        # Get vision info (including face detection results)
+                        info = self.vision_system.get_info()
+                        
+                        # Reset failure counters on success
+                        failure_count = 0
+                        # Reset recovery attempts if it's been a while since last recovery
+                        if current_time - last_recovery_time > 30:
+                            recovery_attempts = 0
+                        
+                        # Store original frame
+                        self.current_frame = frame.copy()
+                        
+                        # Create a copy for drawing face detection results
+                        display_frame = frame.copy()
+                        
+                        # Draw face detection results from the VisionSystem
+                        if info.face_detected and info.face_location:
+                            # Draw rectangle around face
+                            x, y, w, h = info.face_location
+                            cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                            
+                            # Add face detection text
+                            cv2.putText(display_frame, "Face Detected", (10, 30),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        
+                        # Update the display with the frame containing face detection
+                        self.root.after(0, lambda f=display_frame: self._update_vision_canvas(f))
+                        
+                        # Update information display periodically
+                        if current_time - last_info_update_time >= info_update_interval:
+                            self.root.after(0, lambda: self._update_vision_info(info))
+                            last_info_update_time = current_time
                     else:
-                        self.logger.warning("Received invalid frame from camera")
+                        # Frame capture failed
+                        failure_count += 1
+                        self.logger.warning(f"Failed to capture frame ({failure_count}/{max_failures})")
+                        
+                        # Create a message frame
+                        error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(error_frame, f"No camera feed ({failure_count}/{max_failures})", 
+                                  (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        
+                        # Update display with error message
+                        self.root.after(0, lambda f=error_frame: self._update_vision_canvas(f))
+                        
+                        # Try to recover if needed
+                        if failure_count % 5 == 0 and recovery_attempts < max_recovery_attempts:
+                            self._attempt_camera_recovery()
+                            recovery_attempts += 1
+                            last_recovery_time = current_time
+                        
+                        if failure_count >= max_failures:
+                            raise Exception("Too many consecutive frame capture failures")
+                        
+                        # Add delay on failure to allow camera to recover
+                        time.sleep(0.5)
+                    
+                except cv2.error as e:
+                    error_msg = str(e)
+                    self.logger.error(f"OpenCV error: {error_msg}")
+                    
+                    # For matrix assertion errors, add a longer delay
+                    if "error: (-215:Assertion failed) _step >= minstep" in error_msg:
+                        self.logger.warning("Matrix assertion error - waiting for camera to stabilize")
+                        # Display error message
+                        error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(error_frame, "Camera stabilizing...", (50, 240),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        self.root.after(0, lambda f=error_frame: self._update_vision_canvas(f))
+                        time.sleep(1.0)
+                    else:
+                        # Other OpenCV errors may be more serious
+                        self.root.after(0, lambda msg=error_msg: self._handle_vision_error(msg))
+                        break
+                
                 except Exception as e:
-                    self.logger.error(f"Error updating vision: {e}")
-                    # Stop vision system on error
-                    self.use_vision = False
-                    self.vision_button.configure(text="Start Vision")
-                    self.vision_status_var.set("Error: Camera disconnected")
+                    error_msg = str(e)
+                    self.logger.error(f"Error in vision update: {error_msg}")
+                    self.root.after(0, lambda msg=error_msg: self._handle_vision_error(msg))
                     break
-                time.sleep(0.01)  # Small delay to prevent CPU overuse
+                
+                # Small delay between frames to prevent CPU overuse
+                time.sleep(0.01)
         
-        self.vision_update_thread = threading.Thread(target=update_vision)
-        self.vision_update_thread.daemon = True
+        # Start the thread
+        self.vision_update_thread = threading.Thread(target=update_vision, daemon=True)
         self.vision_update_thread.start()
+    
+    def _attempt_camera_recovery(self):
+        """Attempt to recover a failing camera connection."""
+        self.logger.info("Attempting camera recovery...")
+        
+        try:
+            # Only proceed if vision system is initialized
+            if not hasattr(self, 'vision_system') or self.vision_system is None:
+                return False
+                
+            # Check if camera exists
+            if hasattr(self.vision_system, 'camera') and self.vision_system.camera is not None:
+                # Get current camera index
+                camera_index = self.vision_system.camera_index
+                
+                # Release the current camera
+                self.vision_system.camera.release()
+                time.sleep(1.0)  # Give it time to fully release
+                
+                # Try to reinitialize with different backends
+                for backend in [cv2.CAP_DSHOW, cv2.CAP_MSMF, 0] if hasattr(cv2, 'CAP_DSHOW') else [0]:
+                    try:
+                        # Try to open with this backend
+                        self.vision_system.camera = cv2.VideoCapture(camera_index + backend)
+                        
+                        if self.vision_system.camera.isOpened():
+                            # Successfully reopened
+                            # Set camera properties
+                            width = 640
+                            height = 480
+                            if hasattr(self.vision_system, 'camera_width'):
+                                width = self.vision_system.camera_width
+                            if hasattr(self.vision_system, 'camera_height'):
+                                height = self.vision_system.camera_height
+                                
+                            self.vision_system.camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                            self.vision_system.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                            
+                            # Try reading a test frame
+                            ret, frame = self.vision_system.camera.read()
+                            if ret and frame is not None and frame.size > 0:
+                                self.logger.info(f"Camera recovery successful using backend {backend}")
+                                return True
+                    except Exception as e:
+                        self.logger.error(f"Error during camera recovery with backend {backend}: {e}")
+                
+                self.logger.warning("Camera recovery failed with all backends")
+                return False
+            else:
+                self.logger.warning("No camera to recover")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error in camera recovery: {e}")
+            return False
 
+    def _handle_vision_error(self, error_msg):
+        """Handle vision system errors on the main thread."""
+        self.use_vision = False
+        self.vision_button.configure(text="Start Vision")
+        self.vision_status_var.set(f"Error: {error_msg}")
+        
+        # Only show error dialog for serious errors
+        if "Too many consecutive frame capture failures" in error_msg:
+            tk.messagebox.showerror("Vision System Error", 
+                                  f"The vision system encountered an error:\n{error_msg}")
+                                  
     def _capture_image(self):
         """Capture an image from the vision system."""
         if self.use_vision:
@@ -589,24 +852,94 @@ class AIGUI:
                 self.vision_info.insert(tk.END, "\nFailed to capture image\n")
 
     def _list_cameras(self):
-        """List available cameras."""
+        """List available cameras with improved error handling."""
+        # First ensure vision system is initialized
+        if not self._initialize_vision_system():
+            self.vision_info.delete(1.0, tk.END)
+            self.vision_info.insert(tk.END, "Error: Failed to initialize vision system\n")
+            return
+            
         self.vision_info.delete(1.0, tk.END)
         self.vision_info.insert(tk.END, "Checking available cameras...\n")
         
-        available_cameras = []
-        for i in range(10):  # Check first 10 indices
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                ret, _ = cap.read()
-                if ret:
-                    available_cameras.append(f"Camera {i}")
-                    self.vision_info.insert(tk.END, f"Camera {i} is available\n")
-                cap.release()
+        def scan_cameras():
+            try:
+                available_cameras = []
+                
+                # Try both DirectShow (700) and MSMF (1400) backends on Windows
+                backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF] if hasattr(cv2, 'CAP_DSHOW') else [0]
+                
+                for i in range(5):  # Check first 5 indices
+                    self.vision_info.insert(tk.END, f"\nTesting camera {i}...\n")
+                    self.root.update()  # Force update to show progress
+                    
+                    for backend in backends:
+                        try:
+                            backend_name = "DirectShow" if backend == cv2.CAP_DSHOW else "MSMF" if backend == cv2.CAP_MSMF else "Default"
+                            self.vision_info.insert(tk.END, f"  Testing with {backend_name} backend...\n")
+                            self.root.update()
+                            
+                            # Try to open camera with specific backend
+                            cap = cv2.VideoCapture(i + backend)
+                            if not cap.isOpened():
+                                self.vision_info.insert(tk.END, f"  Could not open with {backend_name} backend\n")
+                                continue
+                                
+                            # Try to get camera properties
+                            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                            fps = cap.get(cv2.CAP_PROP_FPS)
+                            
+                            # Try to read a test frame to confirm it's working
+                            ret, frame = cap.read()
+                            if ret and frame is not None and frame.size > 0:
+                                camera_name = f"Camera {i} ({backend_name})"
+                                available_cameras.append(camera_name)
+                                # Update UI with success
+                                msg = f"  SUCCESS: Camera {i} working with {backend_name} backend ({width}x{height} @ {fps:.1f}fps)\n"
+                                self.vision_info.insert(tk.END, msg)
+                                break  # Found a working backend for this camera
+                            else:
+                                self.vision_info.insert(tk.END, f"  Camera opened but failed to provide a valid frame\n")
+                            
+                            # Always release the camera
+                            cap.release()
+                        except Exception as e:
+                            self.logger.warning(f"Error checking camera {i} with backend {backend_name}: {e}")
+                            self.vision_info.insert(tk.END, f"  Error: {str(e)}\n")
+                
+                # Update camera dropdown
+                if available_cameras:
+                    cameras_copy = available_cameras.copy()  # Make a copy for the closure
+                    self.root.after(0, lambda: self._update_camera_list(cameras_copy))
+                    summary = "\nFound working cameras: " + ", ".join(available_cameras) + "\n"
+                    self.vision_info.insert(tk.END, summary)
+                else:
+                    self.root.after(0, lambda: self.vision_info.insert(tk.END, "\nNo working cameras found!\n"))
+                    self.vision_info.insert(tk.END, "\nTroubleshooting tips:\n")
+                    self.vision_info.insert(tk.END, "1. Check if camera is connected and powered on\n")
+                    self.vision_info.insert(tk.END, "2. Make sure no other application is using the camera\n")
+                    self.vision_info.insert(tk.END, "3. Try updating your camera drivers\n")
+                    self.vision_info.insert(tk.END, "4. Some cameras may need specific settings or drivers\n")
+                
+            except Exception as e:
+                error_msg = str(e)
+                self.root.after(0, lambda: self.vision_info.insert(tk.END, f"Error: {error_msg}\n"))
+                
+        # Run camera scan in background thread
+        threading.Thread(target=scan_cameras, daemon=True).start()
         
-        # Update camera combo box
-        self.camera_var.set("Default")
+    def _update_camera_list(self, available_cameras):
+        """Update the camera dropdown with available cameras."""
+        if not available_cameras:
+            self.camera_var.set("Default")
+            camera_combo = self.camera_var.master
+            camera_combo['values'] = ["Default"]
+            return
+            
+        self.camera_var.set(available_cameras[0])  # Select first working camera
         camera_combo = self.camera_var.master
-        camera_combo['values'] = ["Default"] + available_cameras
+        camera_combo['values'] = available_cameras
 
     def _update_vision_features(self):
         """Update vision features based on checkboxes."""
@@ -803,8 +1136,8 @@ class AIGUI:
                         self._animate_typing(message, 0)
                     else:
                         # Display message immediately
-                        self.conv_text.insert(tk.END, message)
-                        self.conv_text.see(tk.END)
+                        self.chat_text.insert(tk.END, message)
+                        self.chat_text.see(tk.END)
             except queue.Empty:
                 pass
         
@@ -815,8 +1148,8 @@ class AIGUI:
         """Animate typing effect for a message."""
         if index < len(message):
             # Add next character
-            self.conv_text.insert(tk.END, message[index])
-            self.conv_text.see(tk.END)
+            self.chat_text.insert(tk.END, message[index])
+            self.chat_text.see(tk.END)
             # Schedule next character
             self.root.after(self.typing_speed, 
                           lambda: self._animate_typing(message, index + 1))
@@ -835,6 +1168,12 @@ class AIGUI:
     def _test_vision(self):
         """Run vision system tests."""
         try:
+            # First ensure vision system is initialized
+            if not self._initialize_vision_system():
+                tk.messagebox.showerror("Vision System Error", 
+                                     "Failed to initialize vision system")
+                return
+            
             # Create test window
             test_window = tk.Toplevel(self.root)
             test_window.title("Vision Test")
@@ -861,6 +1200,12 @@ class AIGUI:
                     toggle_button.configure(text="Start Test")
                     info_text.insert(tk.END, "Test stopped\n")
                 else:
+                    # Make sure vision system is running
+                    if not self.vision_system.is_running:
+                        info_text.insert(tk.END, "Starting vision system...\n")
+                        self.vision_system.start()
+                        time.sleep(0.5)  # Give camera time to initialize
+                    
                     is_running = True
                     toggle_button.configure(text="Stop Test")
                     info_text.insert(tk.END, "Test started\n")
@@ -940,6 +1285,8 @@ class AIGUI:
             def on_test_close():
                 nonlocal is_running
                 is_running = False
+                if self.vision_system.is_running:
+                    self.vision_system.stop()
                 test_window.destroy()
             
             test_window.protocol("WM_DELETE_WINDOW", on_test_close)
@@ -1097,6 +1444,160 @@ class AIGUI:
         
         ttk.Button(button_frame, text="Apply", command=apply_settings).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Cancel", command=settings_window.destroy).pack(side=tk.RIGHT)
+
+    def _initialize_vision_system(self):
+        """Initialize the vision system on demand with improved error handling."""
+        if self.vision_system is not None:
+            # Already initialized
+            return True
+        
+        try:
+            self.vision_status_var.set("Initializing vision system...")
+            self.root.update()  # Force GUI update
+            
+            # Create vision system
+            self.vision_system = VisionSystem()
+            
+            # Add fallback methods if they don't exist
+            if not hasattr(self.vision_system, "set_camera_index"):
+                def set_camera_index(index):
+                    self.logger.info(f"Setting camera index to {index} (fallback method)")
+                    self.vision_system.camera_index = index
+                self.vision_system.set_camera_index = set_camera_index
+                
+            if not hasattr(self.vision_system, "set_resolution"):
+                def set_resolution(width, height):
+                    self.logger.info(f"Setting resolution to {width}x{height} (fallback method)")
+                    self.vision_system.camera_width = width
+                    self.vision_system.camera_height = height
+                self.vision_system.set_resolution = set_resolution
+                
+            # Override the capture_image method to be more resilient
+            original_capture = self.vision_system.capture_image
+            def resilient_capture():
+                """More resilient frame capture that handles common issues"""
+                try:
+                    # Directly try to capture from camera if available
+                    if hasattr(self.vision_system, 'camera') and self.vision_system.camera is not None:
+                        # Try a direct camera read first
+                        ret, frame = self.vision_system.camera.read()
+                        if ret and frame is not None and frame.size > 0:
+                            # Update the last frame time for FPS calculation
+                            self.vision_system.last_frame_time = time.time()
+                            return frame
+                        
+                        # If direct read failed, try releasing and re-opening the camera
+                        self.logger.warning("Direct camera read failed, attempting to recover...")
+                        self.vision_system.camera.release()
+                        time.sleep(0.5)
+                        
+                        # Try using DirectShow backend first on Windows
+                        if hasattr(cv2, 'CAP_DSHOW'):
+                            self.vision_system.camera = cv2.VideoCapture(
+                                self.vision_system.camera_index + cv2.CAP_DSHOW
+                            )
+                        else:
+                            self.vision_system.camera = cv2.VideoCapture(
+                                self.vision_system.camera_index
+                            )
+                            
+                        # Check if camera opened
+                        if self.vision_system.camera.isOpened():
+                            # Try to read a frame
+                            ret, frame = self.vision_system.camera.read()
+                            if ret and frame is not None and frame.size > 0:
+                                # Update the last frame time for FPS calculation
+                                self.vision_system.last_frame_time = time.time()
+                                return frame
+                    
+                    # If we reach here, fall back to the original method
+                    return original_capture()
+                    
+                except Exception as e:
+                    self.logger.error(f"Error in resilient capture: {e}")
+                    # Return an empty frame to avoid returning None
+                    return np.zeros((480, 640, 3), dtype=np.uint8)
+                    
+            # Replace the method
+            self.vision_system.capture_image = resilient_capture
+            
+            # Patch the vision system's start method for better compatibility
+            original_start = self.vision_system.start
+            def patched_start():
+                """Patched version of the start method with better error handling"""
+                try:
+                    # Try using DirectShow backend first on Windows
+                    if hasattr(cv2, 'CAP_DSHOW'):
+                        self.vision_system.camera = cv2.VideoCapture(
+                            self.vision_system.camera_index + cv2.CAP_DSHOW
+                        )
+                    else:
+                        self.vision_system.camera = cv2.VideoCapture(
+                            self.vision_system.camera_index
+                        )
+                        
+                    if not self.vision_system.camera.isOpened():
+                        # Try MSMF backend if DirectShow failed
+                        if hasattr(cv2, 'CAP_MSMF'):
+                            self.vision_system.camera = cv2.VideoCapture(
+                                self.vision_system.camera_index + cv2.CAP_MSMF
+                            )
+                            
+                    if not self.vision_system.camera.isOpened():
+                        # Try default backend as last resort
+                        self.vision_system.camera = cv2.VideoCapture(
+                            self.vision_system.camera_index
+                        )
+                        
+                    if not self.vision_system.camera.isOpened():
+                        raise RuntimeError(f"Failed to open camera at index {self.vision_system.camera_index}")
+                    
+                    # Give the camera time to initialize
+                    time.sleep(0.5)
+                    
+                    # Set camera properties
+                    self.vision_system.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.vision_system.camera_width)
+                    self.vision_system.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.vision_system.camera_height)
+                    
+                    # Read test frame - some cameras need multiple attempts
+                    max_attempts = 10
+                    for attempt in range(max_attempts):
+                        ret, frame = self.vision_system.camera.read()
+                        if ret and frame is not None and frame.size > 0:
+                            # Successfully read a frame
+                            self.logger.info(f"Successfully read camera frame after {attempt+1} attempts")
+                            break
+                        else:
+                            # Failed to read a frame, try again after a short delay
+                            self.logger.warning(f"Failed to read frame on attempt {attempt+1}/{max_attempts}")
+                            time.sleep(0.5)
+                    
+                    # Even if we didn't get a valid frame, proceed anyway
+                    # Some cameras may need more time to stabilize
+                    
+                    # Set status and start threads
+                    self.vision_system.is_running = True
+                    self.vision_system.last_frame_time = time.time()
+                    
+                    return True
+                    
+                except Exception as e:
+                    self.logger.error(f"Error in patched start method: {e}")
+                    if hasattr(self.vision_system, 'camera') and self.vision_system.camera is not None:
+                        self.vision_system.camera.release()
+                        self.vision_system.camera = None
+                    self.vision_system.is_running = False
+                    return False
+                    
+            # Replace the start method with our patched version
+            self.vision_system.start = patched_start
+            
+            self.logger.info("Vision system created and patched")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error initializing vision system: {e}")
+            self.vision_status_var.set(f"Error: {str(e)}")
+            return False
 
 def main():
     """Main function to run the GUI."""
