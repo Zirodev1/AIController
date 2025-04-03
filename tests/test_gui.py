@@ -16,10 +16,13 @@ from ai_core.emotions.emotion_engine import EmotionEngine
 from ai_core.llm.llm_interface import LLMInterface
 from ai_core.nlp.text_processor import TextProcessor
 from ai_core.vision.vision_system import VisionSystem
+# Import the new ImageGenerator
+from ai_core.image.image_generator import ImageGenerator
 # TODO: Re-enable social media integration once the API key issue is resolved
 # from ai_core.social.social_ai import SocialAI
 # from ai_core.platforms.platform_manager import Platform
 import logging
+import re # Import regex for command parsing
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,23 +69,41 @@ class AIGUI:
         self.root.title("AI Companion")
         self.root.geometry("1200x800")
         
-        # Initialize basic components only
+        # Initialize components
         self.voice_input = None
+        # Initialize SpeechEngine (it will load its own config)
         self.speech_engine = SpeechEngine()
         self.emotion_engine = EmotionEngine()
         self.llm = LLMInterface()
         self.text_processor = TextProcessor()
+        self.image_generator = ImageGenerator()
         
         # Defer vision system initialization
         self.vision_system = None
         
+        # Get the actual voice name from SpeechEngine
+        try:
+            self.current_voice_name = self.speech_engine.get_current_voice_name()
+        except AttributeError:
+            self.logger.warning("SpeechEngine missing get_current_voice_name method. Using fallback name.")
+            self.current_voice_name = "AI Voice" # Fallback
+        except Exception as e:
+             self.logger.error(f"Error getting voice name from SpeechEngine: {e}")
+             self.current_voice_name = "AI Voice" # Fallback
+             
         # GUI state variables
         self.is_listening = False
         self.is_push_to_talk = False
         self.message_queue = queue.Queue()
         self.typing_speed = 50
         self.is_typing = False
-        self.current_voice_name = "Zira"
+        # self.current_voice_name is now set above
+        self.image_references = []
+        
+        # Personality Settings Store
+        self.personality_settings = {}
+        # We will store tk variables here to easily access/save settings
+        self._personality_vars = {}
         
         # Interaction mode flags
         self.use_voice_input = True
@@ -104,6 +125,9 @@ class AIGUI:
         # Apply modern theme
         self._apply_theme()
 
+        # Load initial personality (optional)
+        # self._load_personality_settings()
+        
         # Log successful initialization
         self.logger.info("GUI initialized successfully")
 
@@ -150,6 +174,11 @@ class AIGUI:
         # Create notebook for tabbed interface
         notebook = ttk.Notebook(left_panel)
         notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Personality Tab (New)
+        personality_frame = ttk.Frame(notebook)
+        notebook.add(personality_frame, text="Personality")
+        self._create_personality_tab(personality_frame)
         
         # Voice tab
         voice_frame = ttk.Frame(notebook)
@@ -1061,26 +1090,108 @@ class AIGUI:
         self.add_message("You", text, animate=False)
         self.status_var.set("Processing input...")
         
+        # Check for image generation command (Improved Regex)
+        # Pattern breakdown:
+        # (generate|create|make|send): Starting verb
+        # \s+: space
+        # (?:me\s+)? : Optional "me "
+        # (?:(?:a|an)\s+)? : Optional "a " or "an "
+        # (pic|picture|image|photo): Image keyword
+        # \s*: Optional space
+        # (.*): Capture the rest as the potential prompt (Group 3)
+        image_request_match = re.search(
+            r"(generate|create|make|send)\s+(?:me\s+)?(?:(?:a|an)\s+)?(pic|picture|image|photo)\s*(.*)", 
+            text, 
+            re.IGNORECASE
+        )
+        
+        if image_request_match:
+            # Extract raw potential prompt from group 3
+            raw_prompt = image_request_match.group(3).strip()
+            
+            # Clean up common leading words from the prompt
+            cleaned_prompt = re.sub(r"^(of|like|showing|about)\\s+", "", raw_prompt, flags=re.IGNORECASE).strip()
+            cleaned_prompt = re.sub(r"^(you|yourself)\\s*", "", cleaned_prompt, flags=re.IGNORECASE).strip()
+
+            # Use default prompt if cleaning results in an empty string
+            final_prompt = cleaned_prompt if cleaned_prompt else "yourself" 
+            
+            self.add_message("System", f"Generating image with prompt: '{final_prompt}'...", animate=False)
+            # Generate image in a separate thread to avoid blocking GUI
+            # Pass the original text as well for context in the response
+            threading.Thread(target=self._handle_image_generation, args=(final_prompt, text), daemon=True).start()
+            self.status_var.set("Generating image...")
+        else:
+            # Normal text processing
+            try:
+                # Process input
+                nlp_analysis = self.text_processor.process_text(text)
+                self.emotion_engine.process_text(text)
+                emotional_state = self.emotion_engine.get_emotional_state()
+                
+                # Generate response
+                response = self.llm.generate_response(emotional_state, text)
+                
+                # Handle response output
+                if self.use_voice_output:
+                    # If using voice, show text immediately and speak
+                    self.add_message(self.current_voice_name, response, animate=False)
+                    self.speech_engine.speak(response)
+                else:
+                    # If text only, animate the response
+                    self.add_message(self.current_voice_name, response, animate=True)
+                
+            finally:
+                self.status_var.set("Ready")
+
+    def _handle_image_generation(self, prompt: str, original_text: str):
+        """Handle image generation and generate a text response in a background thread."""
+        image_success = False
+        generated_image_path = None # Placeholder for potential future use
+        
         try:
-            # Process input
-            nlp_analysis = self.text_processor.process_text(text)
-            self.emotion_engine.process_text(text)
+            generated_image = self.image_generator.generate_image(prompt)
+            if generated_image:
+                # Image generation successful - queue image for display
+                self.message_queue.put(("image", generated_image))
+                image_success = True
+                # Optionally save the image (uncomment if needed)
+                # generated_image_path = self.image_generator.save_image(generated_image)
+            else:
+                # Image generation failed
+                self.message_queue.put(("System: Sorry, I couldn't generate the image.\n", False))
+        except Exception as e:
+            self.logger.error(f"Error during image generation: {e}")
+            self.message_queue.put(("System: An error occurred during image generation.\n", False))
+
+        # Now, generate a text response based on the outcome and original request
+        try:
             emotional_state = self.emotion_engine.get_emotional_state()
             
-            # Generate response
-            response = self.llm.generate_response(emotional_state, text)
-            
-            # Handle response output
-            if self.use_voice_output:
-                # If using voice, show text immediately and speak
-                self.add_message(self.current_voice_name, response, animate=False)
-                self.speech_engine.speak(response)
+            # Create a context-aware prompt for the LLM
+            if image_success:
+                llm_prompt = f"User asked: \"{original_text}\". You successfully generated an image based on the prompt \"{prompt}\". Respond naturally to the user confirming you've sent the image."
             else:
-                # If text only, animate the response
-                self.add_message(self.current_voice_name, response, animate=True)
+                llm_prompt = f"User asked: \"{original_text}\". You tried to generate an image based on the prompt \"{prompt}\" but failed. Apologize and explain you couldn't generate the image right now."
+            
+            # Generate the text response
+            response = self.llm.generate_response(emotional_state, llm_prompt)
+            
+            # Add the text response to the queue
+            if self.use_voice_output:
+                self.message_queue.put((f"{self.current_voice_name}: {response}\n", False)) # Text first
+                self.speech_engine.speak(response) # Then speak
+            else:
+                self.message_queue.put((f"{self.current_voice_name}: ", False)) # Prefix
+                self.message_queue.put((response + "\n", True)) # Animate the response
+                
+        except Exception as e:
+            self.logger.error(f"Error generating text response after image generation: {e}")
+            self.message_queue.put(("System: Sorry, I had trouble formulating a response after the image request.\n", False))
             
         finally:
-            self.status_var.set("Ready")
+            # Ensure status is updated after generation attempt
+            self.root.after(0, lambda: self.status_var.set("Ready"))
 
     def _initialize_voice_input(self):
         """Initialize or reinitialize the voice input component."""
@@ -1206,20 +1317,75 @@ class AIGUI:
         if not self.is_typing:
             try:
                 while True:
-                    message, should_animate = self.message_queue.get_nowait()
-                    if should_animate:
-                        # Start typing animation for this message
-                        self.is_typing = True
-                        self._animate_typing(message, 0)
+                    message_data = self.message_queue.get_nowait()
+                    
+                    if isinstance(message_data, tuple) and len(message_data) == 2:
+                        message_type, content = message_data
+                        
+                        if message_type == "image":
+                            # Handle image display
+                            self._display_image_in_chat(content)
+                        else:
+                            # Handle text message (string content, boolean animate flag)
+                            # Correctly unpack the tuple: message_type is the string, content is the boolean
+                            message, should_animate = message_type, content 
+                            if should_animate:
+                                # Start typing animation for this message
+                                self.is_typing = True
+                                self._animate_typing(message, 0)
+                            else:
+                                # Display message immediately
+                                self.chat_text.insert(tk.END, message)
+                                self.chat_text.see(tk.END)
                     else:
-                        # Display message immediately
-                        self.chat_text.insert(tk.END, message)
-                        self.chat_text.see(tk.END)
+                        # Handle legacy message format (just text)
+                        # This block might not be needed if add_message always uses tuples
+                        self.logger.warning(f"Received unexpected message format: {type(message_data)}")
+                        try:
+                            message, should_animate = str(message_data), False # Attempt to convert to string
+                            self.chat_text.insert(tk.END, message)
+                            self.chat_text.see(tk.END)
+                        except Exception as fmt_e:
+                             self.logger.error(f"Could not handle legacy message format: {fmt_e}")
+                        
             except queue.Empty:
                 pass
+            except Exception as e:
+                self.logger.error(f"Error processing message queue: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
         
         # Schedule next update
         self.root.after(100, self.process_messages)
+
+    def _display_image_in_chat(self, pil_image: Image.Image):
+        """Displays a PIL image directly in the chat text widget."""
+        try:
+            # Resize image to fit chat width (e.g., max 300px wide)
+            max_width = 300
+            img_width, img_height = pil_image.size
+            if img_width > max_width:
+                scale = max_width / img_width
+                new_height = int(img_height * scale)
+                pil_image = pil_image.resize((max_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Convert PIL image to PhotoImage
+            photo_image = ImageTk.PhotoImage(pil_image)
+            
+            # Keep a reference to prevent garbage collection
+            self.image_references.append(photo_image)
+            # Optionally prune old references if list grows too large
+            if len(self.image_references) > 20:
+                self.image_references.pop(0)
+            
+            # Insert image into the chat text widget
+            self.chat_text.image_create(tk.END, image=photo_image)
+            self.chat_text.insert(tk.END, '\n') # Add a newline after the image
+            self.chat_text.see(tk.END) # Scroll to the end
+            
+        except Exception as e:
+            self.logger.error(f"Error displaying image in chat: {e}")
+            self.add_message("System", "[Error displaying image]", animate=False)
 
     def _animate_typing(self, message, index):
         """Animate typing effect for a message."""
@@ -1777,6 +1943,77 @@ class AIGUI:
             self.vision_info.insert(tk.END, f"Error in face detection test: {e}\n")
             import traceback
             self.vision_info.insert(tk.END, traceback.format_exc() + "\n")
+
+    # --- Personality Tab Creation ---
+    def _create_personality_tab(self, parent):
+        """Creates the main Personality customization tab with sub-tabs."""
+        # Sub-notebook for different sections
+        sub_notebook = ttk.Notebook(parent)
+        sub_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create frames for each sub-tab
+        profile_frame = ttk.Frame(sub_notebook)
+        quirks_frame = ttk.Frame(sub_notebook)
+        questions_frame = ttk.Frame(sub_notebook)
+        preferences_frame = ttk.Frame(sub_notebook)
+        description_frame = ttk.Frame(sub_notebook)
+        
+        # Add frames to the sub-notebook
+        sub_notebook.add(profile_frame, text="Profile")
+        sub_notebook.add(quirks_frame, text="Quirks")
+        sub_notebook.add(questions_frame, text="Questions")
+        sub_notebook.add(preferences_frame, text="Preferences")
+        sub_notebook.add(description_frame, text="Description")
+        
+        # Populate each sub-tab
+        self._create_profile_subtab(profile_frame)
+        self._create_quirks_subtab(quirks_frame)
+        self._create_questions_subtab(questions_frame)
+        self._create_preferences_subtab(preferences_frame)
+        self._create_description_subtab(description_frame)
+        
+        # Apply/Save button
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        apply_button = ttk.Button(button_frame, text="Apply Personality Settings", command=self._apply_personality_settings)
+        apply_button.pack(side=tk.RIGHT)
+
+    def _create_profile_subtab(self, parent):
+        """Populates the Profile sub-tab."""
+        # Add widgets for Name, Nickname, Personality Type, Blood Type, Birthday, Club, etc.
+        # Placeholder - we'll implement this next
+        ttk.Label(parent, text="Profile settings (Name, Type, etc.) will go here.").pack(padx=10, pady=10)
+
+    def _create_quirks_subtab(self, parent):
+        """Populates the Quirks sub-tab."""
+        # Add Checkbuttons for various quirks
+        # Placeholder - we'll implement this next
+        ttk.Label(parent, text="Quirks checkboxes will go here.").pack(padx=10, pady=10)
+
+    def _create_questions_subtab(self, parent):
+        """Populates the Questions sub-tab."""
+        # Add Yes/No Radiobutton sets for questions
+        # Placeholder - we'll implement this next
+        ttk.Label(parent, text="Yes/No questions will go here.").pack(padx=10, pady=10)
+
+    def _create_preferences_subtab(self, parent):
+        """Populates the Preferences sub-tab."""
+        # Add Radiobuttons/Checkbuttons for preferences
+        # Placeholder - we'll implement this next
+        ttk.Label(parent, text="Preference settings will go here.").pack(padx=10, pady=10)
+
+    def _create_description_subtab(self, parent):
+        """Populates the Description sub-tab."""
+        # Add a Text widget for free-form description
+        # Placeholder - we'll implement this next
+        ttk.Label(parent, text="Character Description Text box will go here.").pack(padx=10, pady=10)
+
+    def _apply_personality_settings(self):
+        """Saves the current UI settings into the self.personality_settings dict."""
+        self.logger.info("Applying personality settings...")
+        # Loop through self._personality_vars and update self.personality_settings
+        # Placeholder - we'll implement this next
+        self.status_var.set("Personality settings applied (not yet implemented)")
 
 def main():
     """Main function to run the GUI."""

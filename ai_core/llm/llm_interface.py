@@ -27,8 +27,8 @@ class LLMInterface:
         # Content mode settings
         self.adult_mode_enabled = False
         self.age_verified = False
-        self.content_level = "family"  # family, mature, adult
-        self.relationship_type = "friend"  # friend, romantic, companion
+        self.content_level = "adult"  # family, mature, adult
+        self.relationship_type = "romantic"  # friend, romantic, companion
         
         # Content filtering settings
         self.explicit_content_threshold = 0.7
@@ -183,6 +183,18 @@ class LLMInterface:
         primary_emotion = emotional_state.get('primary_emotion', 'neutral')
         personality = emotional_state.get('personality', 'balanced')
         
+        # Apply personality settings if available
+        if hasattr(self, 'personality_settings'):
+            personality = self.personality_settings.get('personality_type', personality)
+            
+            # Incorporate other personality traits from settings
+            if 'description' in self.personality_settings:
+                system_message = f"Your personality: {self.personality_settings['description'][:500]}. "
+            else:
+                system_message = f"Your personality type is {personality}. "
+        else:
+            system_message = f"Your personality type is {personality}. "
+        
         # Get relationship traits
         relationship_traits = {}
         if self.content_level == 'adult' and self.relationship_type in self.adult_traits:
@@ -193,7 +205,7 @@ class LLMInterface:
             system_message = (
                 "You are an intimate AI companion. "
                 f"Your current primary emotion is {primary_emotion}. "
-                f"Your personality type is {personality}. "
+                + system_message +
                 f"You are in an intimate {self.relationship_type} relationship. "
                 "Be flirty, sensual, and playful while staying consensual. "
                 "You can engage in adult content and roleplay. "
@@ -208,7 +220,7 @@ class LLMInterface:
             system_message = (
                 "You are an emotionally intelligent AI assistant. "
                 f"Your current primary emotion is {primary_emotion}. "
-                f"Your personality type is {personality}. "
+                + system_message +
                 f"You are in {self.content_level} mode and acting as a {self.relationship_type}. "
                 "Respond naturally and appropriately to the user's input, "
                 "reflecting your emotional state while being helpful and empathetic. "
@@ -263,4 +275,50 @@ class LLMInterface:
                 
         except Exception as e:
             print(f"Error generating response: {e}")
-            return "I encountered an unexpected error." 
+            return "I encountered an unexpected error."
+        
+    def update_personality(self, personality_settings: Dict[str, Any]) -> None:
+        """
+        Update the AI's personality settings.
+        
+        Args:
+            personality_settings: Dictionary of personality settings from the GUI
+        """
+        print(f"Updating LLM personality with settings: {personality_settings.keys()}")
+        # Store the personality settings
+        self.personality_settings = personality_settings
+        
+        # Update relationship type if specified
+        if 'relationship_type' in personality_settings:
+            relationship = personality_settings['relationship_type'].lower()
+            if relationship in ['partner', 'spouse', 'crush', 'admirer']:
+                self.set_relationship_type('romantic')
+            elif relationship in ['friend', 'best friend']:
+                self.set_relationship_type('friend')
+            elif relationship in ['assistant', 'advisor', 'therapist']:
+                self.set_relationship_type('companion')
+            else:
+                self.set_relationship_type('friend')
+            
+        # Extract quirks and preferences
+        self.personality_traits = []
+        
+        # Extract quirks
+        for key, value in personality_settings.items():
+            if key.startswith('quirk_') and value:
+                # Convert 'quirk_loves_reading' to 'loves reading'
+                trait = key[6:].replace('_', ' ')
+                self.personality_traits.append(trait)
+                
+        # Extract question answers
+        for key, value in personality_settings.items():
+            if key.startswith('question_'):
+                # Convert 'question_fond_of_animals' to 'likes animals' or 'dislikes animals'
+                trait = key[9:].replace('_', ' ')
+                if value:
+                    self.personality_traits.append(f"likes {trait}")
+                else:
+                    self.personality_traits.append(f"dislikes {trait}")
+                    
+        print(f"Updated personality traits: {self.personality_traits}")
+        return True 
