@@ -49,14 +49,15 @@ A sophisticated AI system designed to control and animate 3D avatars with realis
 - Automated engagement and responses
 - Content scheduling and management
 
-### Image Generation System
-- Selfie generation in different poses and expressions
-- Environment-aware image capture
-- Style variations and filters
-- Mood-based image effects
-- Custom pose generation
-- Background scene creation
-- Real-time image processing
+### Character Image Generation System
+- Stable Diffusion integration for high-quality character images
+- Character selfies and portraits on demand
+- Various emotional expressions (happy, sad, surprised)
+- Different clothing styles (casual, elegant)
+- Various environments (bedroom, garden, cafe)
+- Different activities (reading, cooking, working)
+- Auto-completion of character-appropriate prompts
+- Robust fallback to placeholder images
 
 ## Project Structure
 
@@ -67,6 +68,7 @@ AIController/
 │   ├── emotions/     # Emotional processing
 │   ├── memory/       # Memory system
 │   ├── behavior/     # Behavior control
+│   ├── image/        # Image generation
 │   └── social/       # Social media integration
 ├── vision/           # Computer vision
 │   ├── face/        # Facial recognition
@@ -83,10 +85,7 @@ AIController/
 │   ├── platforms/   # Platform integrations
 │   ├── scheduler/   # Content scheduling
 │   └── validator/   # Content validation
-├── image/            # Image generation
-│   ├── generator/   # Image generation
-│   ├── effects/     # Image effects
-│   └── poses/       # Pose management
+├── generated_images/ # Generated image storage
 └── utils/           # Shared utilities
 ```
 
@@ -116,7 +115,8 @@ Current focus:
 - Basic behavior control
 - Engine integration API
 - Social media integration
-- Image generation system
+- Character image generation with Stable Diffusion
+- Conversation memory integration
 
 ## Installation
 
@@ -124,9 +124,49 @@ Current focus:
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Set up the API server
-python -m api.server
+# Set up environment variables
+# Copy .env.example to .env and add your API keys
+
+# Run the companion
+python ai_companion.py
 ```
+
+## Character Image Generation
+
+The AI Companion includes character image generation capabilities using Stable Diffusion:
+
+1. **Simple image requests**:
+   ```
+   Send me a picture of yourself
+   ```
+
+2. **Specific emotional expressions**:
+   ```
+   Show me a picture of you looking happy
+   Send me a picture of you when you're sad
+   ```
+
+3. **Environment requests**:
+   ```
+   Show me a picture of you in a garden
+   Send me a selfie of you at the beach
+   ```
+
+4. **Activity requests**:
+   ```
+   Send me a picture of you reading a book
+   Show me a picture of you cooking
+   ```
+
+5. **Configuration**:
+   - The system will automatically search for Stable Diffusion models in common locations
+   - For customization, set the `SD_MODEL_PATH` in your `.env` file
+   - No external setup needed, the system handles everything internally
+
+6. **Technical note**:
+   - Uses the diffusers library to load models directly
+   - Includes optimizations for different hardware configurations
+   - Falls back to placeholder images if Stable Diffusion is unavailable
 
 ## API Usage
 
@@ -151,9 +191,9 @@ companion.process_input("Hello!")
 # Get AI response
 response = companion.get_response()
 
-# Social media commands
-companion.process_command("Take a selfie in your garden!")
-companion.process_command("Share your current mood with your followers!")
+# Request character images
+companion.process_command("Show me a picture of you smiling")
+companion.process_command("Send me a selfie of you at the beach")
 
 # Schedule a post
 companion.social_media.schedule_post(

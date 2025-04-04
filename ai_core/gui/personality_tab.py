@@ -506,16 +506,19 @@ class PersonalityTab(ttk.Frame):
         # Create frames for each preference category
         relationship_frame = ttk.Frame(pref_notebook)
         interaction_frame = ttk.Frame(pref_notebook)
+        content_frame = ttk.Frame(pref_notebook)  # Add a new frame for content settings
         conversation_frame = ttk.Frame(pref_notebook)
         
         # Add frames to the notebook
         pref_notebook.add(relationship_frame, text="Relationship")
         pref_notebook.add(interaction_frame, text="Interaction")
+        pref_notebook.add(content_frame, text="Content Level")  # Add the new tab
         pref_notebook.add(conversation_frame, text="Conversation")
         
         # Populate each sub-category
         self._create_relationship_preferences(relationship_frame)
         self._create_interaction_preferences(interaction_frame)
+        self._create_content_preferences(content_frame)  # Add method call for the new tab
         self._create_conversation_preferences(conversation_frame)
     
     def _create_relationship_preferences(self, parent):
@@ -668,6 +671,89 @@ class PersonalityTab(ttk.Frame):
             # Right trait label
             ttk.Label(trait_frame, text=right_trait).pack(side=tk.LEFT, padx=5)
     
+    def _create_content_preferences(self, parent):
+        """Create content level preference options."""
+        # Container for content preferences
+        container = ttk.Frame(parent, padding=10)
+        container.pack(fill=tk.BOTH, expand=True)
+        
+        # Content Level Settings
+        content_frame = ttk.LabelFrame(container, text="Content Level", padding=10)
+        content_frame.pack(fill=tk.X, pady=5)
+        
+        # Content Level options
+        self._personality_vars['content_level'] = tk.StringVar(value="family")
+        
+        ttk.Label(content_frame, text="Select the content level for interactions:").pack(anchor="w", pady=5)
+        
+        content_options = [
+            ("Family-friendly", "family", "Safe for all ages, no mature or explicit content"),
+            ("Mature", "mature", "May include mature themes but no explicit content"),
+            ("Adult", "adult", "May include adult themes and explicit content")
+        ]
+        
+        for display_text, value, description in content_options:
+            option_frame = ttk.Frame(content_frame)
+            option_frame.pack(fill=tk.X, pady=2)
+            
+            rb = ttk.Radiobutton(
+                option_frame,
+                text=display_text,
+                value=value,
+                variable=self._personality_vars['content_level']
+            )
+            rb.pack(side=tk.LEFT)
+            
+            ttk.Label(option_frame, text=f" - {description}", foreground="gray").pack(side=tk.LEFT, padx=5)
+            
+        # Age verification checkbox for adult content
+        age_frame = ttk.Frame(content_frame)
+        age_frame.pack(fill=tk.X, pady=5)
+        
+        self._personality_vars['age_verified'] = tk.BooleanVar(value=False)
+        age_check = ttk.Checkbutton(
+            age_frame,
+            text="I confirm I am at least 18 years old (required for adult content)",
+            variable=self._personality_vars['age_verified']
+        )
+        age_check.pack(anchor="w")
+        
+        # Warning label
+        ttk.Label(
+            content_frame, 
+            text="Note: Adult content requires age verification and may be subject to additional restrictions.",
+            foreground="red"
+        ).pack(anchor="w", pady=5)
+        
+        # Relationship Type Settings
+        relationship_frame = ttk.LabelFrame(container, text="Relationship Mode", padding=10)
+        relationship_frame.pack(fill=tk.X, pady=10)
+        
+        # Relationship Type options
+        self._personality_vars['relationship_type'] = tk.StringVar(value="friend")
+        
+        ttk.Label(relationship_frame, text="Select relationship mode:").pack(anchor="w", pady=5)
+        
+        relationship_options = [
+            ("Friend", "friend", "Casual and friendly conversations"),
+            ("Romantic", "romantic", "Romantic and affectionate interactions"),
+            ("Companion", "companion", "Supportive and personal interactions")
+        ]
+        
+        for display_text, value, description in relationship_options:
+            option_frame = ttk.Frame(relationship_frame)
+            option_frame.pack(fill=tk.X, pady=2)
+            
+            rb = ttk.Radiobutton(
+                option_frame,
+                text=display_text,
+                value=value,
+                variable=self._personality_vars['relationship_type']
+            )
+            rb.pack(side=tk.LEFT)
+            
+            ttk.Label(option_frame, text=f" - {description}", foreground="gray").pack(side=tk.LEFT, padx=5)
+
     def _create_conversation_preferences(self, parent):
         """Create conversation preference options."""
         # Container for conversation preferences
@@ -825,11 +911,35 @@ class PersonalityTab(ttk.Frame):
         else:
              self.logger.warning("Main app instance does not have 'status_var'.")
 
-        # TODO: Send these settings to the LLM interface for the AI to use in responses
+        # Send these settings to the LLM interface for the AI to use in responses
         try:
             if hasattr(self.main_app, 'llm'):
                 self.main_app.llm.update_personality(self.personality_settings)
-                self.main_app.add_message("System", "Personality settings applied to AI.", animate=False)
+                
+                # Display feedback about key settings
+                feedback_msg = "Personality settings applied to AI"
+                
+                # Add content level info if available
+                if 'content_level' in self.personality_settings:
+                    content_level = self.personality_settings['content_level'].capitalize()
+                    feedback_msg += f" (Content: {content_level}"
+                
+                    # Check if adult content is properly verified
+                    if content_level == "Adult" and not self.personality_settings.get('age_verified', False):
+                        feedback_msg += " - downgraded to Mature due to missing age verification)"
+                    else:
+                        feedback_msg += ")"
+                
+                # Add relationship type if available
+                if 'relationship_type' in self.personality_settings:
+                    relationship = self.personality_settings['relationship_type'].capitalize()
+                    if 'content_level' not in self.personality_settings:
+                        feedback_msg += f" (Relationship: {relationship})"
+                    else:
+                        feedback_msg += f" (Relationship: {relationship})"
+                
+                feedback_msg += "."
+                self.main_app.add_message("System", feedback_msg, animate=False)
         except Exception as e:
             self.logger.error(f"Error updating LLM personality: {e}")
             

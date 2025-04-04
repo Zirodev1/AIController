@@ -4,7 +4,7 @@ Interface for LLM-based response generation with content filtering.
 import os
 import json
 import requests
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -162,13 +162,15 @@ class LLMInterface:
         
         return text.strip()
         
-    def generate_response(self, emotional_state: Dict[str, Any], user_input: str) -> str:
+    def generate_response(self, emotional_state: Dict[str, Any], user_input: str, 
+                         context: List[Tuple[str, str]] = None) -> str:
         """
-        Generate a response based on emotional state and user input.
+        Generate a response based on emotional state, user input, and conversation context.
         
         Args:
             emotional_state: Current emotional state of the system
             user_input: User's input text
+            context: Optional list of prior (user_input, ai_response) exchanges
             
         Returns:
             str: Generated response
@@ -232,9 +234,21 @@ class LLMInterface:
         
         # Create the message payload
         messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_input}
+            {"role": "system", "content": system_message}
         ]
+        
+        # Add conversation context if provided
+        if context and len(context) > 0:
+            for i, (user_msg, ai_msg) in enumerate(context):
+                # Skip if empty messages
+                if not user_msg.strip() or not ai_msg.strip():
+                    continue
+                    
+                messages.append({"role": "user", "content": user_msg})
+                messages.append({"role": "assistant", "content": ai_msg})
+        
+        # Add the current user message
+        messages.append({"role": "user", "content": user_input})
         
         # Prepare the API request
         data = {
@@ -288,8 +302,27 @@ class LLMInterface:
         # Store the personality settings
         self.personality_settings = personality_settings
         
+        # Update content level if specified
+        if 'content_level' in personality_settings:
+            content_level = personality_settings['content_level']
+            age_verified = personality_settings.get('age_verified', False)
+            
+            # Ensure age verification for adult content
+            if content_level == 'adult' and not age_verified:
+                print("Warning: Adult content requested but age not verified. Defaulting to 'mature'.")
+                self.set_content_mode('mature', False)
+            else:
+                self.set_content_mode(content_level, age_verified)
+            
+            print(f"Content level set to: {self.content_level}")
+        
         # Update relationship type if specified
         if 'relationship_type' in personality_settings:
+            relationship = personality_settings['relationship_type']
+            self.set_relationship_type(relationship)
+            print(f"Relationship type set to: {self.relationship_type}")
+        # Legacy relationship_type setting from the old UI
+        elif 'relationship_type' in personality_settings:
             relationship = personality_settings['relationship_type'].lower()
             if relationship in ['partner', 'spouse', 'crush', 'admirer']:
                 self.set_relationship_type('romantic')
@@ -322,3 +355,12 @@ class LLMInterface:
                     
         print(f"Updated personality traits: {self.personality_traits}")
         return True 
+
+    def get_content_mode(self) -> str:
+        """
+        Get the current content filtering mode.
+        
+        Returns:
+            str: Current content mode ('family', 'mature', or 'adult')
+        """
+        return self.content_level 

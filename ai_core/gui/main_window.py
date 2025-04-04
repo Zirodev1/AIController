@@ -28,6 +28,7 @@ from ai_core.gui.personality_tab import PersonalityTab
 from ai_core.gui.voice_tab import VoiceTab
 from ai_core.gui.vision_tab import VisionTab
 from ai_core.gui.chat_tab import ChatTab
+from ai_core.gui.memory_manager import MemoryManager
 
 class MainWindow:
     """Main application window containing all UI components and logic."""
@@ -59,6 +60,9 @@ class MainWindow:
              self.logger.error(f"Error getting voice name from SpeechEngine: {e}")
              self.current_voice_name = "AI Voice" # Fallback
         
+        # Initialize memory system
+        self.memory_manager = MemoryManager(self)
+        
         # GUI state variables
         self.is_listening = False
         self.is_push_to_talk = False
@@ -66,6 +70,7 @@ class MainWindow:
         self.typing_speed = 50
         self.is_typing = False
         self.image_references = []
+        self.face_detect_var = tk.BooleanVar(value=True)
         
         # Personality Settings Store
         self.personality_settings = {}
@@ -324,8 +329,14 @@ class MainWindow:
                 self.emotion_engine.process_text(text)
                 emotional_state = self.emotion_engine.get_emotional_state()
                 
+                # Get conversation context from memory
+                context = self.memory_manager.get_recent_context()
+                
                 # Generate response
-                response = self.llm.generate_response(emotional_state, text)
+                response = self.llm.generate_response(emotional_state, text, context)
+                
+                # Store the exchange in memory
+                self.memory_manager.add_interaction(text, response)
                 
                 # Handle response output
                 if self.use_voice_output:
@@ -344,10 +355,27 @@ class MainWindow:
         image_success = False
         
         try:
-            generated_image = self.image_generator.generate_image(prompt)
+            # Parse the image request
+            params = self.image_generator.parse_image_request(original_text)
+            
+            # Check if we need to use the provided prompt
+            if "prompt" not in params and prompt:
+                params["prompt"] = prompt
+                
+            self.logger.info(f"Generating character image with params: {params}")
+            
+            # Generate the image with character parameters
+            generated_image = self.image_generator.generate_image(**params)
+            
             if generated_image:
                 # Image generation successful - queue image for display
                 self.message_queue.put(("image", generated_image))
+                
+                # Save the image
+                saved_path = self.image_generator.save_image(generated_image, f"character_{int(time.time())}")
+                if saved_path:
+                    self.logger.info(f"Image saved to {saved_path}")
+                    
                 image_success = True
             else:
                 # Image generation failed
@@ -362,12 +390,19 @@ class MainWindow:
             
             # Create a context-aware prompt for the LLM
             if image_success:
-                llm_prompt = f"User asked: \"{original_text}\". You successfully generated an image based on the prompt \"{prompt}\". Respond naturally to the user confirming you've sent the image."
+                llm_prompt = f"User asked: \"{original_text}\". You successfully sent an image of yourself as requested. Respond naturally as if you're a character who just shared a selfie/picture of yourself."
             else:
-                llm_prompt = f"User asked: \"{original_text}\". You tried to generate an image based on the prompt \"{prompt}\" but failed. Apologize and explain you couldn't generate the image right now."
+                llm_prompt = f"User asked: \"{original_text}\". You tried to send an image of yourself but couldn't. Apologize and explain you couldn't create the image right now."
+            
+            # Get conversation context
+            context = self.memory_manager.get_recent_context() if hasattr(self, 'memory_manager') else None
             
             # Generate the text response
-            response = self.llm.generate_response(emotional_state, llm_prompt)
+            response = self.llm.generate_response(emotional_state, llm_prompt, context)
+            
+            # Store in memory if available
+            if hasattr(self, 'memory_manager'):
+                self.memory_manager.add_interaction(original_text, response)
             
             # Add the text response to the queue
             if self.use_voice_output:
@@ -384,6 +419,53 @@ class MainWindow:
         finally:
             # Ensure status is updated after generation attempt
             self.root.after(0, lambda: self.status_var.set("Ready"))
+
+    def _parse_image_parameters(self, text: str) -> dict:
+        """Parse image generation parameters from the text."""
+        params = {}
+        
+        # Parse size
+        size_match = re.search(r"size\s+(\d+)x(\d+)", text, re.IGNORECASE)
+        if size_match:
+            try:
+                width = min(int(size_match.group(1)), 1024)  # Cap at 1024 for safety
+                height = min(int(size_match.group(2)), 1024)
+                params['size'] = (width, height)
+            except ValueError:
+                pass
+                
+        # Parse style
+        style_patterns = [
+            r"style\s+([a-zA-Z0-9 ]+)", 
+            r"in\s+([a-zA-Z0-9]+)\s+style",
+            r"([a-zA-Z0-9]+)\s+style"
+        ]
+        
+        for pattern in style_patterns:
+            style_match = re.search(pattern, text, re.IGNORECASE)
+            if style_match:
+                style = style_match.group(1).strip()
+                if style:
+                    params['style'] = style
+                break
+                
+        # Parse negative prompt
+        negative_patterns = [
+            r"negative\s+(.+?)(,|$|\.|;)",
+            r"no\s+(.+?)(,|$|\.|;)",
+            r"without\s+(.+?)(,|$|\.|;)",
+        ]
+        
+        negative_prompts = []
+        for pattern in negative_patterns:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                if match.group(1).strip():
+                    negative_prompts.append(match.group(1).strip())
+                    
+        if negative_prompts:
+            params['negative_prompt'] = ", ".join(negative_prompts)
+            
+        return params
 
     def process_messages(self):
         """Process and display queued messages."""
@@ -565,6 +647,16 @@ class MainWindow:
         if not self.use_vision or not self.vision_system:
             return
             
+        # Load face cascade for direct detection if needed
+        if self.face_detect_var.get() and not hasattr(self, 'face_cascade'):
+            try:
+                cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                self.face_cascade = cv2.CascadeClassifier(cascade_path)
+                self.logger.info("Loaded face cascade for direct detection")
+            except Exception as e:
+                self.logger.error(f"Error loading face cascade: {e}")
+                self.face_cascade = None
+                
         # Function to update frames
         def update_vision():
             try:
@@ -576,6 +668,10 @@ class MainWindow:
                         if frame is not None:
                             # Process frame with face detection, etc.
                             processed_frame = self.vision_system.process_frame(frame)
+                            
+                            # Direct face detection in GUI for stability if needed
+                            if hasattr(self, 'face_cascade') and self.face_cascade and self.face_detect_var.get():
+                                self._apply_direct_face_detection(processed_frame)
                             
                             # Update UI with processed frame
                             self.vision_tab._update_vision_canvas(processed_frame)
@@ -601,14 +697,47 @@ class MainWindow:
         vision_thread = threading.Thread(target=update_vision, daemon=True)
         vision_thread.start()
         
+    def _apply_direct_face_detection(self, frame):
+        """Apply direct face detection to reduce flickering"""
+        try:
+            # Convert to grayscale for face detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Apply face detection
+            faces = self.face_cascade.detectMultiScale(
+                gray, 
+                scaleFactor=1.2, 
+                minNeighbors=4, 
+                minSize=(30, 30)
+            )
+            
+            # Draw face rectangles for stability
+            for (x, y, w, h) in faces:
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 3)
+                
+            # If any faces were detected, update the status bar
+            if len(faces) > 0 and not self.vision_system.get_info().face_detected:
+                # This adds an extra indication of face presence
+                self.status_var.set(f"Face detected ({len(faces)})")
+                
+        except Exception as e:
+            # Silently fail on errors since this is just a stabilization feature
+            self.logger.debug(f"Direct face detection error: {e}")
+            pass
+
     def _attempt_camera_recovery(self):
         """Attempt to recover from camera failure."""
         self.add_message("System", "Attempting to recover camera...", animate=False)
         
         try:
             if self.vision_system:
-                self.vision_system.reset_camera()
-                self.add_message("System", "Camera reset successful", animate=False)
+                # Use the new robust recovery mechanism
+                if self.vision_system.attempt_camera_recovery():
+                    self.add_message("System", "Camera recovery successful", animate=False)
+                    self.status_var.set("Camera recovered")
+                else:
+                    self.add_message("System", "Camera recovery failed - please check your camera connection", animate=False)
+                    self.status_var.set("Camera recovery failed")
                 
         except Exception as e:
             self.logger.error(f"Camera recovery failed: {e}")

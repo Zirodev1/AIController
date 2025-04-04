@@ -1,0 +1,25 @@
+{
+  "model_path": "",
+  "api_url": "http://localhost:7860/sdapi/v1/txt2img",
+  "settings": {
+    "sampler_name": "Euler a",
+    "steps": 30,
+    "hires_fix": true,
+    "width": 1024,
+    "height": 1360,
+    "hr_upscaler": "R-ESRGAN 4x+ Anime6B",
+    "hr_scale": 1.5,
+    "hr_second_pass_steps": 20,
+    "denoising_strength": 0.7,
+    "cfg_scale": 7,
+    "negative_prompt": "bad quality, worst quality, worst detail, sketch, censor"
+  },
+  "character_presets": {
+    "default": "1girl, beautiful, looking at viewer, standing",
+    "happy": "1girl, beautiful, looking at viewer, happy, smiling",
+    "sad": "1girl, beautiful, looking at viewer, sad, crying",
+    "surprised": "1girl, beautiful, looking at viewer, surprised, shocked",
+    "casual": "1girl, beautiful, looking at viewer, casual clothes",
+    "elegant": "1girl, beautiful, looking at viewer, elegant dress"
+  }
+}

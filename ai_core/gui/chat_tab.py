@@ -5,6 +5,8 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext
 import logging
 
+from ai_core.gui.command_processor import CommandProcessor
+
 class ChatTab:
     """
     Tab containing the chat interface for interacting with the AI.
@@ -13,6 +15,9 @@ class ChatTab:
         self.parent = parent_frame
         self.main_window = main_window
         self.logger = logging.getLogger(__name__)
+        
+        # Initialize command processor
+        self.command_processor = CommandProcessor(main_window)
         
         self._create_widgets()
         
@@ -46,6 +51,12 @@ class ChatTab:
                               command=self._handle_text_input)
         send_button.grid(row=0, column=1, padx=5)
         
+        # Add a command button
+        command_button = ttk.Button(input_frame, text="/",
+                                 command=self._show_command_help,
+                                 width=2)
+        command_button.grid(row=0, column=2, padx=(0, 5))
+        
         # Bind Enter key
         self.text_input.bind('<Return>', lambda e: self._handle_text_input())
         
@@ -59,8 +70,23 @@ class ChatTab:
         text = self.text_input.get().strip()
         if text:
             self.text_input.delete(0, tk.END)
-            self.main_window._process_input(text)
             
+            # Check if it's a command
+            if text.startswith('/') and self.command_processor.process_text(text):
+                return
+                
+            # Not a command, process as normal input
+            self.main_window._process_input(text)
+    
+    def _show_command_help(self):
+        """Show command help when the command button is clicked."""
+        # First, insert '/' into the text input
+        self.text_input.insert(tk.END, '/')
+        self.text_input.focus_set()
+        
+        # Show command help
+        self.command_processor._show_help("Available commands:")
+        
     def clear_chat(self):
         """Clear the chat display."""
         self.chat_text.delete(1.0, tk.END)

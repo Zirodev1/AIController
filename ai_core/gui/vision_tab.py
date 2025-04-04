@@ -7,6 +7,7 @@ import logging
 import threading
 import cv2
 import numpy as np
+import time
 from PIL import Image, ImageTk
 
 class VisionTab:
@@ -89,6 +90,10 @@ class VisionTab:
         ttk.Button(camera_buttons, text="Capture Image",
                  command=self._capture_image).grid(row=0, column=2, padx=2)
         
+        # Add recovery button
+        ttk.Button(camera_buttons, text="Recover Camera", 
+                 command=self._attempt_camera_recovery).grid(row=0, column=3, padx=2)
+        
     def toggle_vision(self):
         """Toggle the vision system on/off."""
         if not self.main_window.use_vision:
@@ -118,7 +123,8 @@ class VisionTab:
         """Initialize the vision system."""
         try:
             # Create the vision system
-            self.main_window.vision_system = self.main_window.vision_system or self.main_window.VisionSystem()
+            from ai_core.vision.vision_system import VisionSystem
+            self.main_window.vision_system = VisionSystem()
             
             # Parse camera index
             camera_str = self.camera_var.get()
@@ -150,15 +156,15 @@ class VisionTab:
             # Set debug mode
             self.main_window.vision_system.set_debug_mode(self.debug_var.get())
             
-            # Initialize the camera
-            self.main_window.vision_system.initialize()
-            
             # Register callbacks
             self.main_window.vision_system.register_callbacks(
                 on_frame=self._update_vision_canvas,
                 on_error=self._handle_vision_error,
                 on_info=self._update_vision_info
             )
+            
+            # Initialize the camera
+            self.main_window.vision_system.initialize()
             
             self.main_window.add_message("System", "Vision system initialized", animate=False)
             
@@ -201,6 +207,9 @@ class VisionTab:
             # Convert to PhotoImage
             photo_image = ImageTk.PhotoImage(pil_image)
             
+            # Clear existing content
+            self.main_window.vision_canvas.delete("all")
+            
             # Update canvas
             self.main_window.vision_canvas.create_image(
                 canvas_width // 2, canvas_height // 2,
@@ -216,13 +225,13 @@ class VisionTab:
     def _resize_vision_canvas(self, event):
         """Handle canvas resize event."""
         # Just force a redraw of the current frame if available
-        if hasattr(self.main_window.vision_system, 'current_frame') and self.main_window.vision_system.current_frame is not None:
-            self._update_vision_canvas(self.main_window.vision_system.current_frame)
+        if hasattr(self.main_window, 'vision_system') and self.main_window.vision_system and self.main_window.vision_system.get_current_frame() is not None:
+            self._update_vision_canvas(self.main_window.vision_system.get_current_frame())
             
     def _update_vision_info(self, info=None):
         """Update the vision info text box."""
         if info is None:
-            return
+            info = self.main_window.vision_system.get_vision_info()
             
         try:
             # Clear current info
@@ -239,8 +248,30 @@ class VisionTab:
         self.logger.error(f"Vision error: {error_msg}")
         self.main_window.add_message("System", f"Vision error: {error_msg}", animate=False)
         
-        # Attempt to recover if possible
-        self.main_window._attempt_camera_recovery()
+        # In severe cases, attempt camera recovery automatically
+        if "Multiple frame capture failures" in error_msg or "Failed to read" in error_msg:
+            self.main_window.root.after(500, self._attempt_camera_recovery)
+        
+    def _attempt_camera_recovery(self):
+        """Attempt to recover from camera failure."""
+        self.main_window.add_message("System", "Attempting to recover camera...", animate=False)
+        
+        try:
+            if self.main_window.vision_system:
+                # Use the new robust recovery mechanism
+                if self.main_window.vision_system.attempt_camera_recovery():
+                    self.main_window.add_message("System", "Camera recovery successful", animate=False)
+                    self.main_window.status_var.set("Camera recovered")
+                else:
+                    self.main_window.add_message("System", "Camera recovery failed - please check your camera connection", animate=False)
+                    self.main_window.status_var.set("Camera recovery failed")
+                    
+                # Update vision info display
+                self._update_vision_info()
+                
+        except Exception as e:
+            self.logger.error(f"Camera recovery error: {e}")
+            self.main_window.add_message("System", f"Camera recovery error: {str(e)}", animate=False)
         
     def _list_cameras(self):
         """List available cameras."""
@@ -254,15 +285,34 @@ class VisionTab:
         available_cameras = []
         
         try:
-            # Scan up to 5 cameras (0-4 indices)
-            for i in range(5):
-                cap = cv2.VideoCapture(i)
-                if cap.isOpened():
-                    ret, _ = cap.read()
-                    if ret:
-                        available_cameras.append(f"Camera {i}")
-                    cap.release()
-                    
+            # Try different backends for better camera detection
+            backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, 0]  # Windows backends
+            
+            # Scan for cameras with different backends
+            for backend in backends:
+                for i in range(5):  # Check indices 0-4
+                    try:
+                        camera_index = i
+                        if backend:
+                            camera_index += backend
+                            
+                        cap = cv2.VideoCapture(camera_index)
+                        if cap.isOpened():
+                            ret, _ = cap.read()
+                            if ret:
+                                # If using a backend, include in name
+                                if backend:
+                                    backend_name = "DirectShow" if backend == cv2.CAP_DSHOW else "MediaFoundation" if backend == cv2.CAP_MSMF else "Default"
+                                    camera_name = f"Camera {i} ({backend_name})"
+                                else:
+                                    camera_name = f"Camera {i}"
+                                    
+                                if camera_name not in available_cameras:
+                                    available_cameras.append(camera_name)
+                            cap.release()
+                    except Exception as e:
+                        self.logger.debug(f"Error checking camera {i} with backend {backend}: {e}")
+                        
         except Exception as e:
             self.logger.error(f"Error scanning cameras: {e}")
             
@@ -280,10 +330,24 @@ class VisionTab:
             self.main_window.add_message("System", f"- {camera}", animate=False)
             
         # Update combobox values
-        camera_combo = ttk.Combobox(self.parent.winfo_children()[0].winfo_children()[0], 
-                                  textvariable=self.camera_var,
-                                  values=available_cameras)
-        camera_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        camera_combo = None
+        for child in self.parent.winfo_children():
+            if isinstance(child, ttk.LabelFrame) and child.cget("text") == "Vision Settings":
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, ttk.Frame):
+                        for widget in subchild.winfo_children():
+                            if isinstance(widget, ttk.Combobox):
+                                camera_combo = widget
+                                break
+                                
+        if camera_combo:
+            camera_combo.configure(values=available_cameras)
+        else:
+            self.logger.error("Could not find camera combobox")
+            
+        # Reset to default if current selection not available
+        if self.camera_var.get() not in available_cameras:
+            self.camera_var.set(available_cameras[0])
         
     def _update_vision_features(self):
         """Update vision system features based on UI settings."""
@@ -306,6 +370,9 @@ class VisionTab:
                 self.main_window.vision_system.set_debug_mode(self.debug_var.get())
                 debug_state = "enabled" if self.debug_var.get() else "disabled"
                 self.main_window.add_message("System", f"Vision debug mode {debug_state}", animate=False)
+                
+                # Update the vision info to show debug info
+                self._update_vision_info()
                 
             except Exception as e:
                 self.logger.error(f"Error toggling debug mode: {e}")
@@ -373,6 +440,11 @@ class VisionTab:
                                  command=lambda: capture())
         capture_button.pack(side=tk.LEFT, padx=5)
         
+        # Add recovery button to test window
+        recovery_button = ttk.Button(controls_frame, text="Recover Camera", 
+                                  command=lambda: recover_camera())
+        recovery_button.pack(side=tk.LEFT, padx=5)
+        
         close_button = ttk.Button(controls_frame, text="Close", 
                                command=lambda: on_test_close())
         close_button.pack(side=tk.RIGHT, padx=5)
@@ -428,6 +500,19 @@ class VisionTab:
                     
             except Exception as e:
                 status_var.set(f"Error capturing frame: {str(e)}")
+        
+        # Function to recover camera
+        def recover_camera():
+            status_var.set("Attempting camera recovery...")
+            
+            try:
+                if self.main_window.vision_system:
+                    if self.main_window.vision_system.attempt_camera_recovery():
+                        status_var.set("Camera recovery successful")
+                    else:
+                        status_var.set("Camera recovery failed")
+            except Exception as e:
+                status_var.set(f"Recovery error: {str(e)}")
                 
         # Function to run the test
         def run_test():
@@ -519,8 +604,10 @@ class VisionTab:
         # Prepare canvas
         def on_canvas_configure(event):
             # Force update if we have a current frame
-            if self.main_window.vision_system and self.main_window.vision_system.current_frame is not None:
-                update_test_canvas(self.main_window.vision_system.current_frame)
+            if self.main_window.vision_system and self.main_window.vision_system.get_current_frame() is not None:
+                frame = self.main_window.vision_system.get_current_frame()
+                result_frame = self.main_window.vision_system.process_frame_for_test(frame)
+                update_test_canvas(result_frame)
                 
         # Bind canvas resize event
         test_canvas.bind('<Configure>', on_canvas_configure) 
